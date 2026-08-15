@@ -169,6 +169,13 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 			continue
 		}
 
+		seasonEpsKey := pkg.GetEpisodeKeyName(episodeInfo.Season, episodeInfo.Episode)
+		fullSeasonSubs, found := fullSeasonEpisodeSubs(fullSeasonSubDict, seasonEpsKey)
+		if !found {
+			d.log.Infoln("seriesDlFunc.saveFullSeasonSub, no sub found, Skip", seasonEpsKey)
+			continue
+		}
+
 		// 创建一个 chan 用于任务的中断和超时
 		done := make(chan interface{}, 1)
 		// 接收内部任务的 panic
@@ -182,13 +189,7 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 				close(panicChan)
 			}()
 			// 匹配对应的 Eps 去处理
-			seasonEpsKey := pkg.GetEpisodeKeyName(episodeInfo.Season, episodeInfo.Episode)
-			if fullSeasonSubDict[seasonEpsKey] == nil || len(fullSeasonSubDict[seasonEpsKey]) < 1 {
-				d.log.Infoln("seriesDlFunc.saveFullSeasonSub, no sub found, Skip", seasonEpsKey)
-				done <- nil
-			}
-
-			done <- d.oneVideoSelectBestSub(episodeInfo.FileFullPath, fullSeasonSubDict[seasonEpsKey])
+			done <- d.oneVideoSelectBestSub(episodeInfo.FileFullPath, fullSeasonSubs)
 		}()
 
 		select {
@@ -245,4 +246,9 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 	}
 
 	return nil
+}
+
+func fullSeasonEpisodeSubs(fullSeasonSubDict map[string][]string, episodeKey string) ([]string, bool) {
+	subs := fullSeasonSubDict[episodeKey]
+	return subs, len(subs) > 0
 }

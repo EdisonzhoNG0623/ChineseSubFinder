@@ -28,3 +28,29 @@ func TestSeriesDownloadOutcomeError(t *testing.T) {
 		})
 	}
 }
+
+func TestFullSeasonEpisodeSubs(t *testing.T) {
+	fullSeasonSubs := map[string][]string{
+		"S01E01": {"episode.ass"},
+		"S01E02": {},
+	}
+
+	tests := []struct {
+		name      string
+		episode   string
+		wantFound bool
+	}{
+		{name: "subtitle exists", episode: "S01E01", wantFound: true},
+		{name: "empty subtitle list", episode: "S01E02", wantFound: false},
+		{name: "episode missing", episode: "S01E03", wantFound: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, found := fullSeasonEpisodeSubs(fullSeasonSubs, test.episode)
+			if found != test.wantFound {
+				t.Fatalf("fullSeasonEpisodeSubs(%q) found = %t, want %t", test.episode, found, test.wantFound)
+			}
+		})
+	}
+}
