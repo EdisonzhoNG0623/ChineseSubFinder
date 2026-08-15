@@ -101,10 +101,17 @@ func nextAttemptAt(oneJob taskQueue2.OneJob) time.Time {
 	if oneJob.ForceRun || oneJob.DownloadTimes == 0 {
 		return time.Time{}
 	}
-	if explicit := time.Time(oneJob.NextAttemptTime); !explicit.IsZero() {
+	if explicit := time.Time(oneJob.NextAttemptTime); !isUnsetRetryTime(explicit) {
 		return explicit
 	}
 	return time.Time(oneJob.UpdateTime).Add(retryDelay(oneJob))
+}
+
+// emby.Time serializes its zero value as "0001-01-01T00:00:00" and parses
+// it back in time.Local. That parsed value is not time.Time.IsZero() in
+// non-UTC zones, even though it is the persisted representation of "unset".
+func isUnsetRetryTime(value time.Time) bool {
+	return value.IsZero() || value.Year() <= 1
 }
 
 func scheduleRetry(oneJob *taskQueue2.OneJob, now time.Time) {
@@ -115,4 +122,8 @@ func scheduleRetry(oneJob *taskQueue2.OneJob, now time.Time) {
 func clearRetrySchedule(oneJob *taskQueue2.OneJob) {
 	oneJob.NextAttemptTime = emby.Time{}
 	oneJob.ForceRun = false
+}
+
+func retryLifetimeExpired(oneJob taskQueue2.OneJob, now time.Time, expirationDays int) bool {
+	return time.Time(oneJob.AddedTime).AddDate(0, 0, expirationDays).Before(now)
 }

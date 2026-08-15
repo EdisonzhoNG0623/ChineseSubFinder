@@ -226,7 +226,7 @@ func (t *TaskQueue) AutoDetectUpdateJobStatus(oneJob task_queue2.OneJob, inErr e
 		oneJob.ForceRun = false
 
 		// 超过了时间限制，默认是 90 天, A.Before(B) : A < B == true
-		if (time.Time)(oneJob.AddedTime).AddDate(0, 0, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime).Before(now) {
+		if retryLifetimeExpired(oneJob, now, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime) {
 			// 超过 90 天了
 			oneJob.JobStatus = task_queue2.Failed
 			clearRetrySchedule(&oneJob)
@@ -383,6 +383,7 @@ func (t *TaskQueue) read() {
 func (t *TaskQueue) afterRead() {
 	interruptedJobs := make([]task_queue2.OneJob, 0)
 	bdmvStreamJobs := make([]task_queue2.OneJob, 0)
+	legacyRetryJobs := make([]task_queue2.OneJob, 0)
 
 	for taskPriority := 0; taskPriority <= taskPriorityCount; taskPriority++ {
 		t.taskPriorityMapList[taskPriority].Each(func(key interface{}, value interface{}) {
@@ -393,6 +394,11 @@ func (t *TaskQueue) afterRead() {
 			}
 			if oneJob.JobStatus == task_queue2.Downloading {
 				interruptedJobs = append(interruptedJobs, oneJob)
+				return
+			}
+			if oneJob.JobStatus == task_queue2.Waiting && oneJob.DownloadTimes > 0 &&
+				isUnsetRetryTime(time.Time(oneJob.NextAttemptTime)) && !oneJob.ForceRun {
+				legacyRetryJobs = append(legacyRetryJobs, oneJob)
 			}
 		})
 	}
@@ -419,6 +425,34 @@ func (t *TaskQueue) afterRead() {
 	}
 	if len(bdmvStreamJobs) > 0 {
 		t.log.Infof("TaskQueue startup migration ignored %d BDMV stream segment jobs", len(bdmvStreamJobs))
+	}
+
+	// Older queue files predate NextAttemptTime. Persist the same inferred
+	// schedule that selection already honors so restarts and diagnostics see
+	// an explicit retry time rather than a misleading zero value.
+	changedPriorities = make(map[int]struct{})
+	for _, oneJob := range legacyRetryJobs {
+		readyAt := nextAttemptAt(oneJob)
+		if readyAt.IsZero() {
+			continue
+		}
+		oneJob.NextAttemptTime = emby.Time(readyAt)
+		priorityValue, found := t.taskKeyMap.Get(oneJob.Id)
+		if !found {
+			t.log.Errorln("afterRead migrate retry schedule missing job index", oneJob.VideoFPath)
+			continue
+		}
+		priority := priorityValue.(int)
+		t.taskPriorityMapList[priority].Put(oneJob.Id, oneJob)
+		changedPriorities[priority] = struct{}{}
+	}
+	for priority := range changedPriorities {
+		if err := t.save(priority); err != nil {
+			t.log.Errorln("afterRead persist retry schedule migration failed", priority, err)
+		}
+	}
+	if len(legacyRetryJobs) > 0 {
+		t.log.Infof("TaskQueue startup migration persisted %d legacy retry schedules", len(legacyRetryJobs))
 	}
 
 	for _, oneJob := range interruptedJobs {

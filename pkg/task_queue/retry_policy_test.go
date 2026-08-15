@@ -165,6 +165,12 @@ func TestQueueStartupMigration(t *testing.T) {
 			JobStatus: taskQueue2.Downloading, TaskPriority: DefaultTaskPriorityLevel,
 			AddedTime: emby.Time(now), UpdateTime: emby.Time(now),
 		},
+		"legacy-retry": {
+			Id: "legacy-retry", VideoFPath: "/media/legacy-retry.mkv",
+			JobStatus: taskQueue2.Waiting, TaskPriority: FirstRetryTaskPriorityLevel,
+			DownloadTimes: 2, ErrorInfo: ErrNoSubFound.Error(),
+			AddedTime: emby.Time(now), UpdateTime: emby.Time(now),
+		},
 	}
 	payload, err := json.Marshal(jobs)
 	if err != nil {
@@ -186,6 +192,41 @@ func TestQueueStartupMigration(t *testing.T) {
 		interrupted.ErrorInfo != "download interrupted by process restart" ||
 		!time.Time(interrupted.NextAttemptTime).After(now) {
 		t.Fatalf("interrupted job recovery failed: %+v", interrupted)
+	}
+	_, legacyRetry := queue.GetOneJobByID("legacy-retry")
+	if !time.Time(legacyRetry.NextAttemptTime).After(now) {
+		t.Fatalf("legacy retry schedule was not persisted: %+v", legacyRetry)
+	}
+}
+
+func TestExpiredWaitingJobBecomesTerminalBeforeSelection(t *testing.T) {
+	const queueName = "task_queue_expired_waiting_test"
+	cache_center.DelDb(queueName)
+	t.Cleanup(func() { cache_center.DelDb(queueName) })
+
+	queue := NewTaskQueue(cache_center.NewCacheCenter(queueName, log_helper.GetLogger4Tester()))
+	t.Cleanup(queue.Close)
+	now := time.Now()
+	expirationDays := settings.Get().AdvancedSettings.TaskQueue.ExpirationTime
+	expired := taskQueue2.OneJob{
+		Id: "expired-waiting", VideoFPath: "/expired.mkv",
+		JobStatus: taskQueue2.Waiting, TaskPriority: FirstRetryTaskPriorityLevel,
+		DownloadTimes: 76, RetryTimes: 1, ErrorInfo: ErrNoSubFound.Error(),
+		AddedTime:  emby.Time(now.AddDate(0, 0, -expirationDays-1)),
+		UpdateTime: emby.Time(now),
+	}
+	if ok, err := queue.Add(expired); err != nil || !ok {
+		t.Fatalf("Add(expired) = %v, %v", ok, err)
+	}
+
+	queue.BeforeGetOneJob()
+	_, current := queue.GetOneJobByID(expired.Id)
+	if current.JobStatus != taskQueue2.Failed || current.DownloadTimes != expired.DownloadTimes ||
+		!time.Time(current.NextAttemptTime).IsZero() {
+		t.Fatalf("expired waiting job was not terminalized without another attempt: %+v", current)
+	}
+	if found, _, err := queue.GetOneWaitingJob(); err != nil || found {
+		t.Fatalf("expired waiting job remained selectable: found=%v err=%v", found, err)
 	}
 }
 

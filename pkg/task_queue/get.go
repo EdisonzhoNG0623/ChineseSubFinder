@@ -1,9 +1,10 @@
 package task_queue
 
 import (
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"time"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/emby"
 	task_queue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
 )
 
@@ -11,28 +12,59 @@ func (t *TaskQueue) BeforeGetOneJob() {
 	defer t.queueLock.Unlock()
 	t.queueLock.Lock()
 
-	// 这里需要手动判断 Done 的任务是否超过三个月了，超过就需要手动删除
-	for TaskPriority := 0; TaskPriority <= taskPriorityCount; TaskPriority++ {
-		t.taskPriorityMapList[TaskPriority].Each(func(key interface{}, value interface{}) {
+	now := time.Now()
+	expirationDays := settings.Get().AdvancedSettings.TaskQueue.ExpirationTime
+	jobsToDelete := make([]task_queue2.OneJob, 0)
+	type prioritizedJob struct {
+		priority int
+		job      task_queue2.OneJob
+	}
+	jobsToTerminalize := make([]prioritizedJob, 0)
+	changedPriorities := make(map[int]struct{})
 
-			nowOneJob := value.(task_queue2.OneJob)
-			if //nowOneJob.JobStatus == task_queue.Done &&
-			// 默认是 90day, A.After(B) : A > B == true
-			(time.Time)(nowOneJob.UpdateTime).AddDate(0, 0, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime).After(time.Now()) == false {
-				// 找到就删除
-				bok, err := t.del(nowOneJob.Id)
-				if err != nil {
-					t.log.Errorf("GetOneWaitingJob.Del.Done ExpirationTime %v error: %s", settings.Get().AdvancedSettings.TaskQueue.ExpirationTime, err.Error())
-					return
-				}
-				if bok == false {
-					t.log.Errorf("GetOneWaitingJob.Del.Done ExpirationTime %v error: %s", settings.Get().AdvancedSettings.TaskQueue.ExpirationTime, "Del failed")
-					return
-
-				}
+	for taskPriority := 0; taskPriority <= taskPriorityCount; taskPriority++ {
+		t.taskPriorityMapList[taskPriority].Each(func(key interface{}, value interface{}) {
+			oneJob := value.(task_queue2.OneJob)
+			// Preserve the existing retention cleanup, but do not mutate the map
+			// while iterating it.
+			if time.Time(oneJob.UpdateTime).AddDate(0, 0, expirationDays).After(now) == false {
+				jobsToDelete = append(jobsToDelete, oneJob)
 				return
 			}
+
+			// A waiting task outside its retry lifetime must become terminal before
+			// supplier calls. Previously it was downloaded once more and only then
+			// marked failed, which made a large legacy queue look like a hot loop.
+			if oneJob.JobStatus == task_queue2.Waiting && retryLifetimeExpired(oneJob, now, expirationDays) {
+				oneJob.JobStatus = task_queue2.Failed
+				clearRetrySchedule(&oneJob)
+				oneJob.UpdateTime = emby.Time(now)
+				jobsToTerminalize = append(jobsToTerminalize, prioritizedJob{priority: taskPriority, job: oneJob})
+			}
 		})
+	}
+
+	for _, oneJob := range jobsToDelete {
+		bok, err := t.del(oneJob.Id)
+		if err != nil {
+			t.log.Errorf("BeforeGetOneJob delete expired job %s: %s", oneJob.Id, err.Error())
+			continue
+		}
+		if !bok {
+			t.log.Errorf("BeforeGetOneJob delete expired job %s: not found", oneJob.Id)
+		}
+	}
+	for _, item := range jobsToTerminalize {
+		t.taskPriorityMapList[item.priority].Put(item.job.Id, item.job)
+		changedPriorities[item.priority] = struct{}{}
+	}
+	for taskPriority := range changedPriorities {
+		if err := t.save(taskPriority); err != nil {
+			t.log.Errorf("BeforeGetOneJob persist terminal expired jobs priority %d: %s", taskPriority, err.Error())
+		}
+	}
+	if len(jobsToTerminalize) > 0 {
+		t.log.Infof("TaskQueue terminalized %d waiting jobs outside the %d-day retry lifetime", len(jobsToTerminalize), expirationDays)
 	}
 }
 
