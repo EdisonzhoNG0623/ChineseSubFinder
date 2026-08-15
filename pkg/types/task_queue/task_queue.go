@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
@@ -32,6 +33,17 @@ type OneJob struct {
 	MediaServerInsideVideoID string           `json:"media_server_inside_video_id"` // 媒体服务器中，这个视频的 ID，如果是 Emby 就对应它内部这个视频的 ID，后续用于指定刷新视频信息
 	ErrorInfo                string           `json:"error_info"`                   // 这个任务的错误信息
 	DownloadTimes            int              `json:"download_times"`               // 下载的次数，用于统计下载过几次
+	NextAttemptTime          emby.Time        `json:"next_attempt_time,omitempty"`  // 自适应退避后的下次尝试时间
+	ForceRun                 bool             `json:"force_run,omitempty"`          // 用户手动插队；消费一次后自动清除
+}
+
+// IsBDMVStreamFile reports whether path points to one physical segment inside
+// a Blu-ray BDMV/STREAM directory. Those segments are not standalone movies;
+// the scanner creates one synthetic movie path for the disc instead.
+func IsBDMVStreamFile(path string) bool {
+	streamDir := filepath.Dir(filepath.Clean(path))
+	return strings.EqualFold(filepath.Base(streamDir), "STREAM") &&
+		strings.EqualFold(filepath.Base(filepath.Dir(streamDir)), "BDMV")
 }
 
 func NewOneJob(videoType common.VideoType, videoFPath string, taskPriority int, MediaServerInsideVideoID ...string) *OneJob {

@@ -3,6 +3,7 @@ package downloader
 import (
 	"fmt"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
+	"runtime/debug"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
@@ -12,6 +13,11 @@ import (
 	common2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 	taskQueue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
 )
+
+type queueWorkerPanic struct {
+	value interface{}
+	stack []byte
+}
 
 func (d *Downloader) queueDownloaderLocal() {
 
@@ -84,7 +90,7 @@ func (d *Downloader) queueDownloaderLocal() {
 					return
 				}
 				if bok == false {
-					d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%d) == false", oneJob.Id))
+					d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%s) == false", oneJob.Id))
 					return
 				}
 				return
@@ -99,7 +105,7 @@ func (d *Downloader) queueDownloaderLocal() {
 					return
 				}
 				if bok == false {
-					d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%d) == false", oneJob.Id))
+					d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%s) == false", oneJob.Id))
 					return
 				}
 				return
@@ -121,7 +127,7 @@ func (d *Downloader) queueDownloaderLocal() {
 				return
 			}
 			if bok == false {
-				d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%d) == false", oneJob.Id))
+				d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%s) == false", oneJob.Id))
 				return
 			}
 			d.log.Infoln(oneJob.VideoFPath, "is missing, Delete This Job")
@@ -230,6 +236,7 @@ func (d *Downloader) queueDownloaderLocal() {
 	}
 	// 取出来后，需要标记为正在下载
 	oneJob.JobStatus = taskQueue2.Downloading
+	oneJob.ForceRun = false
 	bok, err = d.downloadQueue.Update(oneJob)
 	if err != nil {
 		d.log.Errorln("d.downloadQueue.Update()", err)
@@ -253,12 +260,12 @@ func (d *Downloader) queueDownloaderLocal() {
 	// 创建一个 chan 用于任务的中断和超时
 	done := make(chan interface{}, 1)
 	// 接收内部任务的 panic
-	panicChan := make(chan interface{}, 1)
+	panicChan := make(chan queueWorkerPanic, 1)
 
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
-				panicChan <- p
+				panicChan <- queueWorkerPanic{value: p, stack: debug.Stack()}
 			}
 			close(done)
 			close(panicChan)
@@ -297,9 +304,14 @@ func (d *Downloader) queueDownloaderLocal() {
 		//d.UpdateInfo(oneJob)
 
 		break
-	case p := <-panicChan:
-		// 遇到内部的 panic，向外抛出
-		panic(p)
+	case p, ok := <-panicChan:
+		// panicChan 正常关闭时也可被 select 选中，此时收到的是 nil。
+		// 只有真正捕获到 panic 值时才向外抛出，避免 panic(nil) 刷屏。
+		if ok && p.value != nil {
+			panicErr := fmt.Errorf("download worker panic: %v", p.value)
+			d.log.Errorf("%v\n%s", panicErr, p.stack)
+			d.downloadQueue.AutoDetectUpdateJobStatus(oneJob, panicErr)
+		}
 	case <-d.ctx.Done():
 		{
 			// 取消这个 context

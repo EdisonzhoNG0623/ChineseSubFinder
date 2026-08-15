@@ -77,6 +77,9 @@ func (cb *ControllerBase) ChangeJobStatusHandler(c *gin.Context) {
 	} else {
 		nowOneJob.JobStatus = task_queue3.Waiting
 	}
+	// A user-triggered Waiting transition bypasses backoff exactly once. This
+	// keeps manual retry responsive without making high-priority failures spin.
+	nowOneJob.ForceRun = nowOneJob.JobStatus == task_queue3.Waiting
 
 	bok, err = cb.cronHelper.DownloadQueue.Update(nowOneJob)
 	if err != nil {

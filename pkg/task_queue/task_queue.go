@@ -103,13 +103,19 @@ func (t *TaskQueue) checkPriority(oneJob task_queue2.OneJob) task_queue2.OneJob 
 // degrade 降一级，会校验范围
 func (t *TaskQueue) degrade(oneJob task_queue2.OneJob) task_queue2.OneJob {
 
-	oneJob.TaskPriority -= 1
+	// A larger number means a lower priority. The old subtraction promoted
+	// repeatedly failing jobs and caused them to crowd out fresh work.
+	oneJob.TaskPriority += 1
 
 	return t.checkPriority(oneJob)
 }
 
 // Add 放入元素，放入的时候会根据 TaskPriority 进行归类，存在的不会新增和更新
 func (t *TaskQueue) Add(oneJob task_queue2.OneJob) (bool, error) {
+	if task_queue2.IsBDMVStreamFile(oneJob.VideoFPath) {
+		t.log.Debugln("TaskQueue.Add skip BDMV stream segment", oneJob.VideoFPath)
+		return false, nil
+	}
 
 	defer t.queueLock.Unlock()
 	t.queueLock.Lock()
@@ -194,57 +200,67 @@ func (t *TaskQueue) AutoDetectUpdateJobStatus(oneJob task_queue2.OneJob, inErr e
 	defer t.queueLock.Unlock()
 	t.queueLock.Lock()
 
+	previousStatus := oneJob.JobStatus
+	previousPriority := oneJob.TaskPriority
+	now := time.Now()
+
 	// 检查权限范围
 	oneJob = t.checkPriority(oneJob)
 
 	if inErr == nil {
-
-		// 如果任务的优先级是 0，那么这个任务就认为是一次性任务，下载完毕不管如何都会设置为 ignore
+		// 如果任务的优先级是 0，那么这个任务就认为是一次性任务，下载完毕后设置为 ignore。
 		if oneJob.TaskPriority == 0 {
 			oneJob.JobStatus = task_queue2.Ignore
+		} else {
+			oneJob.JobStatus = task_queue2.Done
 		}
-
-		// 没有错误就是完成
 		oneJob.TaskPriority = DefaultTaskPriorityLevel
-		oneJob.JobStatus = task_queue2.Done
 		oneJob.DownloadTimes += 1
+		oneJob.RetryTimes = 0
+		oneJob.ErrorInfo = ""
+		clearRetrySchedule(&oneJob)
 	} else {
+		oneJob.ErrorInfo = inErr.Error()
+		oneJob.DownloadTimes += 1
+		oneJob.RetryTimes += 1
+		oneJob.ForceRun = false
+
 		// 超过了时间限制，默认是 90 天, A.Before(B) : A < B == true
-		if (time.Time)(oneJob.AddedTime).AddDate(0, 0, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime).Before(time.Now()) == true {
+		if (time.Time)(oneJob.AddedTime).AddDate(0, 0, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime).Before(now) {
 			// 超过 90 天了
 			oneJob.JobStatus = task_queue2.Failed
+			clearRetrySchedule(&oneJob)
 		} else {
-			// 还在 90 天内
-			// 是否是首次，那么就看它的 Level 是否是在 5，然后 retry == 0
-			if oneJob.TaskPriority == DefaultTaskPriorityLevel && oneJob.RetryTimes == 0 {
+			// 还在 90 天内。默认任务首次失败后进入重试等级；之后每达到
+			// MaxRetryTimes 才再降低一级。RetryTimes 必须真实递增。
+			if oneJob.TaskPriority == DefaultTaskPriorityLevel && oneJob.RetryTimes == 1 {
 				// 需要重置到 L6
-				oneJob.RetryTimes = 0
 				oneJob.TaskPriority = FirstRetryTaskPriorityLevel
-			} else {
-				if oneJob.RetryTimes > settings.Get().AdvancedSettings.TaskQueue.MaxRetryTimes {
-					// 超过重试次数会进行一次降级，然后重置这个次数
-					oneJob.RetryTimes = 0
-					oneJob = t.degrade(oneJob)
-				}
+			} else if oneJob.RetryTimes >= settings.Get().AdvancedSettings.TaskQueue.MaxRetryTimes {
+				// 达到重试次数会进行一次降级，然后重置这个次数
+				oneJob.RetryTimes = 0
+				oneJob = t.degrade(oneJob)
 			}
 
 			// 强制为 waiting
 			oneJob.JobStatus = task_queue2.Waiting
+			scheduleRetry(&oneJob, now)
 		}
 
 		// 如果任务的优先级是 0，那么这个任务就认为是一次性任务，下载完毕不管如何都会设置为 ignore
 		if oneJob.TaskPriority == 0 {
 			oneJob.JobStatus = task_queue2.Ignore
+			clearRetrySchedule(&oneJob)
 		}
-		// 传入的错误需要放进来
-		oneJob.ErrorInfo = inErr.Error()
-		oneJob.DownloadTimes += 1
 	}
 
 	// 只要是进入完成标记流程的任务，如果优先级还是很高，那么就需要重置到默认优先级上
 	if oneJob.TaskPriority < DefaultTaskPriorityLevel {
 		oneJob.TaskPriority = DefaultTaskPriorityLevel
 	}
+	t.log.Infof("TaskQueue transition id=%s status=%d->%d priority=%d->%d attempts=%d retry=%d next=%s error=%q",
+		oneJob.Id, previousStatus, oneJob.JobStatus, previousPriority, oneJob.TaskPriority,
+		oneJob.DownloadTimes, oneJob.RetryTimes, time.Time(oneJob.NextAttemptTime).Format(time.RFC3339), oneJob.ErrorInfo)
 	// 这里不要用错了，要用无锁的，不然会阻塞
 	bok, err := t.update(oneJob)
 	if err != nil {
@@ -365,25 +381,48 @@ func (t *TaskQueue) read() {
 }
 
 func (t *TaskQueue) afterRead() {
-	// 将 downloading 的任务重置为 waiting
-	for TaskPriority := 0; TaskPriority <= taskPriorityCount; TaskPriority++ {
-		t.taskPriorityMapList[TaskPriority].Each(func(key interface{}, value interface{}) {
+	interruptedJobs := make([]task_queue2.OneJob, 0)
+	bdmvStreamJobs := make([]task_queue2.OneJob, 0)
 
-			nowOneJob := value.(task_queue2.OneJob)
-			if nowOneJob.JobStatus == task_queue2.Downloading {
-				nowOneJob.JobStatus = task_queue2.Waiting
-				nowOneJob.DownloadTimes += 1
-				bok, err := t.update(nowOneJob)
-				if err != nil {
-					t.log.Errorln("afterRead.update failed", err)
-					return
-				}
-				if bok == false {
-					t.log.Errorln("afterRead.update failed")
-					return
-				}
+	for taskPriority := 0; taskPriority <= taskPriorityCount; taskPriority++ {
+		t.taskPriorityMapList[taskPriority].Each(func(key interface{}, value interface{}) {
+			oneJob := value.(task_queue2.OneJob)
+			if task_queue2.IsBDMVStreamFile(oneJob.VideoFPath) {
+				bdmvStreamJobs = append(bdmvStreamJobs, oneJob)
+				return
+			}
+			if oneJob.JobStatus == task_queue2.Downloading {
+				interruptedJobs = append(interruptedJobs, oneJob)
 			}
 		})
+	}
+
+	changedPriorities := make(map[int]struct{})
+	for _, oneJob := range bdmvStreamJobs {
+		oneJob.JobStatus = task_queue2.Ignore
+		oneJob.ErrorInfo = "ignored BDMV stream segment"
+		clearRetrySchedule(&oneJob)
+		oneJob.UpdateTime = emby.Time(time.Now())
+		priorityValue, found := t.taskKeyMap.Get(oneJob.Id)
+		if !found {
+			t.log.Errorln("afterRead ignore BDMV stream missing job index", oneJob.VideoFPath)
+			continue
+		}
+		priority := priorityValue.(int)
+		t.taskPriorityMapList[priority].Put(oneJob.Id, oneJob)
+		changedPriorities[priority] = struct{}{}
+	}
+	for priority := range changedPriorities {
+		if err := t.save(priority); err != nil {
+			t.log.Errorln("afterRead persist BDMV stream migration failed", priority, err)
+		}
+	}
+	if len(bdmvStreamJobs) > 0 {
+		t.log.Infof("TaskQueue startup migration ignored %d BDMV stream segment jobs", len(bdmvStreamJobs))
+	}
+
+	for _, oneJob := range interruptedJobs {
+		t.AutoDetectUpdateJobStatus(oneJob, errors.New("download interrupted by process restart"))
 	}
 }
 

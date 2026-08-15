@@ -1,7 +1,10 @@
 package base
 
 import (
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subhd"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subtitle_best"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/zimuku"
 	"net/http"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/local_http_proxy_server"
@@ -66,12 +69,14 @@ func (cb *ControllerBase) CheckProxyHandler(c *gin.Context) {
 	// 使用提交过来的这个代理地址，测试多个字幕网站的可用性
 	subSupplierHub := subSupplier.NewSubSupplierHub(
 		// 这里无需传递下载字幕的缓存实例
-		//zimuku.NewSupplier(cb.fileDownloader),
-		//subhd.NewSupplier(cb.fileDownloader),
 		xunlei.NewSupplier(cb.fileDownloader),
 		shooter.NewSupplier(cb.fileDownloader),
 		a4k.NewSupplier(cb.fileDownloader),
 	)
+	if pkg.LiteMode() == false {
+		subSupplierHub.AddSubSupplier(zimuku.NewSupplier(cb.fileDownloader))
+		subSupplierHub.AddSubSupplier(subhd.NewSupplier(cb.fileDownloader))
+	}
 
 	if settings.Get().SubtitleSources.AssrtSettings.Enabled == true &&
 		settings.Get().SubtitleSources.AssrtSettings.Token != "" {

@@ -223,6 +223,7 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 
 	if save2LocalSubCount < 1 {
 		// 下载的字幕都没有一个能够写入到本地的，那么就有问题了
+		errSave2Local = seriesDownloadOutcomeError(save2LocalSubCount, errSave2Local)
 		d.downloadQueue.AutoDetectUpdateJobStatus(job, errSave2Local)
 		return errSave2Local
 	}

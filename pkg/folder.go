@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/get_access_time"
 	"github.com/sirupsen/logrus"
 )
 
@@ -518,70 +517,48 @@ func GetConfigRootDirFPath() string {
 
 // ClearIdleSubFixCacheFolder 清理闲置的字幕修正缓存文件夹
 func ClearIdleSubFixCacheFolder(l *logrus.Logger, rootSubFixCacheFolder string, outOfDate time.Duration) error {
-
-	/*
-		从 GetRootSubFixCacheFolder 目录下，遍历第一级目录中的文件夹
-		然后每个文件夹中，统计里面最后的访问时间（可能有多个文件），如果超过某个时间范围就标记删除这个文件夹
-	*/
-	pathSep := string(os.PathSeparator)
 	files, err := os.ReadDir(rootSubFixCacheFolder)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
-	wait2ScanFolder := make([]string, 0)
-	for _, curFile := range files {
-
-		fullPath := rootSubFixCacheFolder + pathSep + curFile.Name()
-		if curFile.IsDir() == true {
-			// 需要关注文件夹
-			wait2ScanFolder = append(wait2ScanFolder, fullPath)
-		}
-	}
-
-	wait2DeleteFolder := make([]string, 0)
-	getAccessTimeEx := get_access_time.GetAccessTimeEx{}
 	cutOff := time.Now().Add(-outOfDate)
-	for _, s := range wait2ScanFolder {
-
-		files, err = os.ReadDir(s)
+	removed := 0
+	for _, entry := range files {
+		if !entry.IsDir() {
+			continue
+		}
+		folderPath := filepath.Join(rootSubFixCacheFolder, entry.Name())
+		latestModTime := time.Time{}
+		err = filepath.WalkDir(folderPath, func(_ string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			info, infoErr := d.Info()
+			if infoErr != nil {
+				return infoErr
+			}
+			if info.ModTime().After(latestModTime) {
+				latestModTime = info.ModTime()
+			}
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-
-		maxAccessTime := time.Now()
-		// 需要统计这个文件夹下的所有文件的 AccessTIme，找出最新（最大的值）的那个时间，再比较
-		for i, curFile := range files {
-
-			fullPath := s + pathSep + curFile.Name()
-			if curFile.IsDir() == true {
-				continue
-			}
-			// 只需要关注文件
-			accessTime, err := getAccessTimeEx.GetAccessTime(fullPath)
-			if err != nil {
-				return err
-			}
-			if i == 0 {
-				maxAccessTime = accessTime
-			}
-			if Time2SecondNumber(accessTime) > Time2SecondNumber(maxAccessTime) {
-				maxAccessTime = accessTime
-			}
+		if latestModTime.IsZero() || !latestModTime.Before(cutOff) {
+			continue
 		}
-		if maxAccessTime.Sub(cutOff) <= 0 {
-			// 确认可以删除
-			wait2DeleteFolder = append(wait2DeleteFolder, s)
-		}
-	}
-	// 统一清理过期的文件夹
-	for _, s := range wait2DeleteFolder {
-		l.Infoln("Try 2 clear SubFixCache Folder:", s)
-		err := os.RemoveAll(s)
-		if err != nil {
+		if err = os.RemoveAll(folderPath); err != nil {
 			return err
 		}
+		removed++
 	}
-
+	if removed > 0 {
+		l.Infof("SubFix cache cleanup removed %d folders older than %s", removed, outOfDate)
+	}
 	return nil
 }
 

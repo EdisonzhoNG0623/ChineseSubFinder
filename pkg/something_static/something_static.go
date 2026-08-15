@@ -87,7 +87,7 @@ func GetCodeFromWeb(l *logrus.Logger, nowTimeFileNamePrix string, fileDownloader
 
 	getCode, err := fileDownloader.MediaInfoDealers.SubtitleBestApi.GetCode()
 	if err != nil {
-		l.Errorln("SubtitleBestApi.GetCode", err)
+		l.Warningln("SubtitleBestApi.GetCode", err)
 		return "", "", errors.New(fmt.Sprintf("get code from web failed, %v \n", err.Error()))
 	}
 	nowTT := time.Now().Format("2006-01-02")

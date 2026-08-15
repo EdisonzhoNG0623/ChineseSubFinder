@@ -16,7 +16,9 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/a4k"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/assrt"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/shooter"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subhd"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/xunlei"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/zimuku"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/notify_center"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
@@ -68,8 +70,8 @@ func (p *PreDownloadProcess) Init() *PreDownloadProcess {
 		updateTimeString, code, err := something_static.GetCodeFromWeb(p.log, nowTimeFileNamePrix, p.fileDownloader)
 		if err != nil {
 			notify_center.Notify.Add("GetSubhdCode", "GetCodeFromWeb,"+err.Error())
-			p.log.Errorln("something_static.GetCodeFromWeb", err)
-			p.log.Errorln("Skip Subhd download")
+			p.log.Warningln("something_static.GetCodeFromWeb", err)
+			p.log.Warningln("SubHD shared verification code unavailable; continue with direct browser flow")
 			// 没有则需要清空
 			common2.SubhdCode = ""
 		} else {
@@ -105,7 +107,6 @@ func (p *PreDownloadProcess) Init() *PreDownloadProcess {
 	} else {
 
 		p.SubSupplierHub = subSupplier.NewSubSupplierHub(
-			//zimuku.NewSupplier(p.fileDownloader),
 			xunlei.NewSupplier(p.fileDownloader),
 			shooter.NewSupplier(p.fileDownloader),
 			a4k.NewSupplier(p.fileDownloader),
@@ -124,16 +125,29 @@ func (p *PreDownloadProcess) Init() *PreDownloadProcess {
 		}
 
 		if pkg.LiteMode() == false {
-			// 如果不是 Lite 模式，那么就可以开启这个功能
-			if common2.SubhdCode != "" {
-				// 如果找到 code 了，那么就可以继续用这个实例
-				//p.SubSupplierHub.AddSubSupplier(subhd.NewSupplier(p.fileDownloader))
-			}
+			// 浏览器型字幕源仅在全功能模式启用；每个站点内部仍会执行每日下载限额。
+			p.SubSupplierHub.AddSubSupplier(zimuku.NewSupplier(p.fileDownloader))
+			// 作者云端验证码接口下线后也必须注册 SubHD；不需要验证码的下载仍可工作，
+			// 需要验证码时则由 Supplier 自己的浏览器验证流程决定是否能继续。
+			p.SubSupplierHub.AddSubSupplier(subhd.NewSupplier(p.fileDownloader))
 		}
 	}
 	// ------------------------------------------------------------------------
+	// 主动清理可再生成的字幕缓存。下载包保留配置的 TTL（默认 14 天），
+	// 时间轴修正产生的大体积中间文件仅保留 24 小时。
+	cacheRetention := settings.Get().AdvancedSettings.DownloadFileCache.Duration()
+	if _, err := p.fileDownloader.CacheCenter.CleanupDownloadFileCache(time.Now(), cacheRetention); err != nil {
+		p.log.Warningln("CleanupDownloadFileCache", err)
+	}
+	subFixCacheRoot, err := pkg.GetRootSubFixCacheFolder()
+	if err != nil {
+		p.log.Warningln("GetRootSubFixCacheFolder", err)
+	} else if err = pkg.ClearIdleSubFixCacheFolder(p.log, subFixCacheRoot, 24*time.Hour); err != nil {
+		p.log.Warningln("ClearIdleSubFixCacheFolder", err)
+	}
+	// ------------------------------------------------------------------------
 	// 清理自定义的 rod 缓存目录
-	err := pkg.ClearRodTmpRootFolder()
+	err = pkg.ClearRodTmpRootFolder()
 	if err != nil {
 		p.gError = errors.New("ClearRodTmpRootFolder " + err.Error())
 		return p

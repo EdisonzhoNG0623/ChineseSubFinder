@@ -58,8 +58,8 @@ func init() {
 		AppVersion += " Lite"
 		pkg.SetLiteMode(true)
 	} else {
-		// 强制设置为 Lite 模式，取消 Chrome 的相关功能，交给外部的爬虫解决
-		pkg.SetLiteMode(true)
+		loggerBase.Info("Full mode is enabled")
+		pkg.SetLiteMode(false)
 	}
 
 	loggerBase.Infoln("ChineseSubFinder Version:", AppVersion)
@@ -162,7 +162,7 @@ func main() {
 }
 
 /*
-	使用 git tag 来做版本描述，然后在编译的时候传入版本号信息到这个变量上
+使用 git tag 来做版本描述，然后在编译的时候传入版本号信息到这个变量上
 */
 var AppVersion = "unknow"
 
@@ -172,7 +172,7 @@ var ExtEnCode = "abcdefg1234567890"
 // 针对制作群晖的 SPK 应用，无法写入默认的 /config 目录而给出的新的编译条件，直接指向这个目录到当前程序的目录
 var setLinuxConfigPathInSelfPathFlag = flag.String("setconfigselfpath", "", "针对制作群晖的 SPK 应用，无法写入默认的 /config 目录而给出的新的编译条件，直接指向这个目录到当前程序的目录")
 
-var setLiteModeFlag = flag.Bool("litemode", true, "设置为 Lite 模式，不启用 Chrome 相关操作")
+var setLiteModeFlag = flag.Bool("litemode", false, "设置为 Lite 模式，不启用 Chrome 相关操作")
 
 var (
 	BaseKey  = "0123456789123456789" // 基础的密钥，密钥会基于这个基础的密钥生成

@@ -175,19 +175,27 @@ func (b *BackEnd) doPreJob() {
 	} else {
 		// 启动程序只会执行一次，用 Once 控制
 		// 前置的任务，热修复、字幕修改文件名格式、提前下载好浏览器
-		if settings.Get().SpeedDevMode == true {
-			return
-		}
-		if pkg.LiteMode() == false {
+		if shouldSkipPreJob(settings.Get().SpeedDevMode, pkg.LiteMode()) {
+			// Full Mode 和 SpeedDevMode 会跳过旧版 Lite 初始化任务，
+			// 但仍必须结束 PreJob 状态，否则前端会永久显示“初始化”。
+			b.finishPreJob()
 			return
 		}
 		b.logger.Infoln("Setup is Done")
 		b.logger.Infoln("PreJob Will Start...")
 		// 不启用 Chrome 相关操作
-		err := b.preJob.HotFix().ChangeSubNameFormat().Wait()
-		if err != nil {
-			b.logger.Errorln("pre_job", err)
-		}
+		b.preJob.HotFix().ChangeSubNameFormat()
+		b.finishPreJob()
+	}
+}
+
+func shouldSkipPreJob(speedDevMode, liteMode bool) bool {
+	return speedDevMode || !liteMode
+}
+
+func (b *BackEnd) finishPreJob() {
+	if err := b.preJob.Wait(); err != nil {
+		b.logger.Errorln("pre_job", err)
 	}
 }
 

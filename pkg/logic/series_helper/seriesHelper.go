@@ -2,7 +2,9 @@ package series_helper
 
 import (
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
@@ -186,6 +188,8 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 	logger.Infoln(common.QueueName, i, "DlSub Start", seriesInfo.DirPath)
 	logger.Infoln(common.QueueName, i, "IMDB ID:", seriesInfo.ImdbId, "NeedDownloadSubs:", len(seriesInfo.NeedDlEpsKeyList))
 	var outSUbInfos = make([]supplier.SubInfo, 0)
+	var outMu sync.Mutex
+	var supplierWorkers sync.WaitGroup
 	if len(seriesInfo.NeedDlEpsKeyList) < 1 {
 		return outSUbInfos
 	}
@@ -194,11 +198,18 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 	}
 
 	for _, oneSupplier := range Suppliers {
+		oneSupplier := oneSupplier
+		supplierWorkers.Add(1)
 
 		oneSupplierFunc := func() {
+			defer supplierWorkers.Done()
 			defer func() {
 				logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), "End")
 				logger.Infoln("------------------------------------------")
+				if recovered := recover(); recovered != nil {
+					logger.Errorf("%s %d %s supplier panic: %v\n%s", common.QueueName, i,
+						oneSupplier.GetSupplierName(), recovered, debug.Stack())
+				}
 			}()
 
 			var subInfos []supplier.SubInfo
@@ -219,11 +230,14 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 			// 把后缀名给改好
 			sub_helper.ChangeVideoExt2SubExt(subInfos)
 
+			outMu.Lock()
 			outSUbInfos = append(outSUbInfos, subInfos...)
+			outMu.Unlock()
 		}
 
-		oneSupplierFunc()
+		go oneSupplierFunc()
 	}
+	supplierWorkers.Wait()
 
 	return outSUbInfos
 }

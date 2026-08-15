@@ -7,7 +7,7 @@ import (
 )
 
 /*
-	修复之前移除 subhd 和 zimuku 配置后，导致的无法获取字幕搜索链接的问题
+修复之前移除 subhd 和 zimuku 配置后，导致的无法获取字幕搜索链接的问题
 */
 type HotFix007 struct {
 	log *logrus.Logger
@@ -35,11 +35,11 @@ func (h HotFix007) Process() (interface{}, error) {
 func (h HotFix007) process() (bool, error) {
 
 	if settings.Get().AdvancedSettings.SuppliersSettings.SubHD == nil {
-		settings.Get().AdvancedSettings.SuppliersSettings.SubHD = settings.NewOneSupplierSettings(common.SubSiteSubHd, common.SubSubHDRootUrlDef, common.SubSubHDSearchUrl, 20)
+		settings.Get().AdvancedSettings.SuppliersSettings.SubHD = settings.NewOneSupplierSettings(common.SubSiteSubHd, common.SubSubHDRootUrlDef, common.SubSubHDSearchUrl, -1)
 	}
 
 	if settings.Get().AdvancedSettings.SuppliersSettings.Zimuku == nil {
-		settings.Get().AdvancedSettings.SuppliersSettings.Zimuku = settings.NewOneSupplierSettings(common.SubSiteZiMuKu, common.SubZiMuKuRootUrlDef, common.SubZiMuKuSearchFormatUrl, 20)
+		settings.Get().AdvancedSettings.SuppliersSettings.Zimuku = settings.NewOneSupplierSettings(common.SubSiteZiMuKu, common.SubZiMuKuRootUrlDef, common.SubZiMuKuSearchFormatUrl, -1)
 	}
 
 	err := settings.Get().Save()

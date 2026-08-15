@@ -283,7 +283,6 @@ func (s *Supplier) getSubByKeyWord(keyword string) (*SearchSubResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	var errKnow error
 	resp, err := httpClient.R().
 		Get(settings.Get().AdvancedSettings.SuppliersSettings.Assrt.RootUrl +
 			"/sub/search?q=" + tt +
@@ -302,15 +301,17 @@ func (s *Supplier) getSubByKeyWord(keyword string) (*SearchSubResult, error) {
 	*/
 	err = json.Unmarshal([]byte(resp.String()), &searchSubResult)
 	if err != nil {
+		listResultErr := err
 		// 再此尝试解析空列表
 		var searchSubResultEmpty SearchSubResultEmpty
 		err = json.Unmarshal([]byte(resp.String()), &searchSubResultEmpty)
 		if err != nil {
-			// 如果还是解析错误，那么就要把现在的错误和上面的错误仪器返回出去
-			s.log.Errorln(s.GetSupplierName(), "NewHttpClient:", keyword, errKnow.Error())
-			s.log.Errorln(s.GetSupplierName(), "json.Unmarshal", err)
-			notify_center.Notify.Add(s.GetSupplierName()+" NewHttpClient", fmt.Sprintf("keyword: %s, resp: %s, error: %s", keyword, resp.String(), errKnow.Error()))
-			return nil, err
+			// ASSRT 的无结果响应在不同时间可能既不是列表也不是旧版空对象。
+			// 保留两个解析错误，不能解引用从未赋值的 error。
+			decodeErr := fmt.Errorf("decode search response: list result: %v; empty result: %w", listResultErr, err)
+			s.log.Warningln(s.GetSupplierName(), keyword, decodeErr)
+			notify_center.Notify.Add(s.GetSupplierName()+" search response", fmt.Sprintf("keyword: %s, error: %s", keyword, decodeErr))
+			return &searchSubResult, nil
 		}
 		// 赋值过去
 		searchSubResult.Sub.Action = searchSubResultEmpty.Sub.Action
@@ -416,14 +417,14 @@ type SearchSubResult struct {
 					Langchs bool `json:"langchs,omitempty"`
 				} `json:"langlist,omitempty"`
 			} `json:"lang,omitempty"`
-			Id          int    `json:"id,omitempty"`
-			VoteScore   int    `json:"vote_score,omitempty"`
-			Videoname   string `json:"videoname,omitempty"`
-			ReleaseSite string `json:"release_site,omitempty"`
-			Revision    int    `json:"revision,omitempty"`
-			Subtype     string `json:"subtype,omitempty"`
-			NativeName  string `json:"native_name,omitempty"`
-			UploadTime  string `json:"upload_time,omitempty"`
+			Id          int             `json:"id,omitempty"`
+			VoteScore   int             `json:"vote_score,omitempty"`
+			Videoname   string          `json:"videoname,omitempty"`
+			ReleaseSite string          `json:"release_site,omitempty"`
+			Revision    json.RawMessage `json:"revision,omitempty"`
+			Subtype     string          `json:"subtype,omitempty"`
+			NativeName  string          `json:"native_name,omitempty"`
+			UploadTime  string          `json:"upload_time,omitempty"`
 		} `json:"subs,omitempty"`
 		Result  string `json:"result,omitempty"`
 		Keyword string `json:"keyword,omitempty"`
@@ -446,12 +447,12 @@ type OneSubDetail struct {
 					Langchs bool `json:"langchs,omitempty"`
 				} `json:"langlist,omitempty"`
 			} `json:"lang,omitempty"`
-			Size       int    `json:"size,omitempty"`
-			Title      string `json:"title,omitempty"`
-			Videoname  string `json:"videoname,omitempty"`
-			Revision   int    `json:"revision,omitempty"`
-			NativeName string `json:"native_name,omitempty"`
-			UploadTime string `json:"upload_time,omitempty"`
+			Size       int             `json:"size,omitempty"`
+			Title      string          `json:"title,omitempty"`
+			Videoname  string          `json:"videoname,omitempty"`
+			Revision   json.RawMessage `json:"revision,omitempty"`
+			NativeName string          `json:"native_name,omitempty"`
+			UploadTime string          `json:"upload_time,omitempty"`
 			Producer   struct {
 				Producer string `json:"producer,omitempty"`
 				Verifier string `json:"verifier,omitempty"`

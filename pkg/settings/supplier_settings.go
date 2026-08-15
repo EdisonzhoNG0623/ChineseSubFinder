@@ -21,9 +21,9 @@ func NewSuppliersSettings() *SuppliersSettings {
 		Assrt:        NewOneSupplierSettings(common.SubSiteAssrt, common.SubAssrtRootUrlDef, "", -1),
 		A4k:          NewOneSupplierSettings(common.SubSiteA4K, common.SubA4kRootUrlDef, common.SubA4kSearchUrl, -1),
 		SubtitleBest: NewOneSupplierSettings(common.SubSiteSubtitleBest, common.SubSubtitleBestRootUrlDef, common.SubSubtitleBestSearchMovieUrl, -1),
-		// 依然需要给出来，用于手动搜索字幕使用
-		SubHD:  NewOneSupplierSettings(common.SubSiteSubHd, common.SubSubHDRootUrlDef, common.SubSubHDSearchUrl, 20),
-		Zimuku: NewOneSupplierSettings(common.SubSiteZiMuKu, common.SubZiMuKuRootUrlDef, common.SubZiMuKuSearchFormatUrl, 20),
+		// 自用模式不设置本地每日硬上限；每次任务仍只下载 Topic 指定的字幕数。
+		SubHD:  NewOneSupplierSettings(common.SubSiteSubHd, common.SubSubHDRootUrlDef, common.SubSubHDSearchUrl, -1),
+		Zimuku: NewOneSupplierSettings(common.SubSiteZiMuKu, common.SubZiMuKuRootUrlDef, common.SubZiMuKuSearchFormatUrl, -1),
 	}
 }
 
@@ -33,6 +33,18 @@ func (s *SuppliersSettings) ReSetSearchUrl() {
 	s.SubtitleBest.SearchUrl = common.SubSubtitleBestSearchMovieUrl
 	s.SubHD.SearchUrl = common.SubSubHDSearchUrl
 	s.Zimuku.SearchUrl = common.SubZiMuKuSearchFormatUrl
+	// 字幕库旧域名已停用；只迁移内置旧值，保留用户显式配置的镜像站。
+	if s.Zimuku.RootUrl == "https://zimuku.org" {
+		s.Zimuku.RootUrl = common.SubZiMuKuRootUrlDef
+	}
+	// 全功能被移除前的 20 是程序内置默认值；自用恢复版迁移为不限。
+	// 其他正数视为用户显式设置，不做覆盖。
+	if s.SubHD.DailyDownloadLimit == 20 {
+		s.SubHD.DailyDownloadLimit = -1
+	}
+	if s.Zimuku.DailyDownloadLimit == 20 {
+		s.Zimuku.DailyDownloadLimit = -1
+	}
 }
 
 type OneSupplierSettings struct {
@@ -40,6 +52,19 @@ type OneSupplierSettings struct {
 	RootUrl            string `json:"root_url"`
 	SearchUrl          string `json:"search_url"`
 	DailyDownloadLimit int    `json:"daily_download_limit" default:"-1"` // -1 是无限制
+}
+
+// OverDailyDownloadLimit reports whether a supplier should be skipped.
+// Zero disables it, a negative value means unlimited, and a positive value is
+// the maximum number of successful downloads per day.
+func (s *OneSupplierSettings) OverDailyDownloadLimit(downloadCount int) bool {
+	if s.DailyDownloadLimit == 0 {
+		return true
+	}
+	if s.DailyDownloadLimit < 0 {
+		return false
+	}
+	return downloadCount >= s.DailyDownloadLimit
 }
 
 func NewOneSupplierSettings(name string, rootUrl, searchUrl string, dailyDownloadLimit int) *OneSupplierSettings {

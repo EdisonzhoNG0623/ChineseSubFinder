@@ -124,6 +124,9 @@ func (s *Supplier) getSubListFromFile(filePath string) ([]supplier.SubInfo, erro
 
 			return nil, nowError
 		}
+		// 迅雷依赖普通视频文件计算 CID，无法处理 BDMV 伪路径。
+		s.log.Debugln(s.GetSupplierName(), "skip BDMV fake video path", filePath)
+		return nil, nil
 	}
 
 	cid, err := s.getCid(filePath)
@@ -204,7 +207,7 @@ func (s *Supplier) getSubInfos(filePath, cid string) (SublistSliceXunLei, error)
 	return jsonList, nil
 }
 
-//getCid 获取指定文件的唯一 cid
+// getCid 获取指定文件的唯一 cid
 func (s *Supplier) getCid(filePath string) (string, error) {
 	hash := ""
 	sha1Ctx := sha1.New()

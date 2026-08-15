@@ -118,6 +118,9 @@ func (s *Supplier) getSubListFromFile(filePath string) ([]supplier.SubInfo, erro
 
 			return nil, nowError
 		}
+		// 射手依赖普通视频文件计算哈希，无法处理 BDMV 伪路径。
+		s.log.Debugln(s.GetSupplierName(), "skip BDMV fake video path", filePath)
+		return nil, nil
 	}
 
 	hash, err := ComputeFileHash(filePath)

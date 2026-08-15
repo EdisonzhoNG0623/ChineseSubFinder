@@ -3,7 +3,9 @@ package movie_helper
 import (
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
@@ -31,23 +33,39 @@ func OneMovieDlSubInAllSite(logger *logrus.Logger, Suppliers []ifaces.ISupplier,
 	}()
 
 	var outSUbInfos = make([]supplier.SubInfo, 0)
+	var outMu sync.Mutex
+	var supplierWorkers sync.WaitGroup
 	logger.Infoln(common.QueueName, i, "DlSub Start", oneVideoFullPath)
 	for _, oneSupplier := range Suppliers {
+		oneSupplier := oneSupplier
+		supplierWorkers.Add(1)
+		go func() {
+			defer supplierWorkers.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.Errorf("%s %d %s supplier panic: %v\n%s", common.QueueName, i,
+						oneSupplier.GetSupplierName(), recovered, debug.Stack())
+				}
+			}()
 
-		logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), oneVideoFullPath)
+			logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), oneVideoFullPath)
 
-		if oneSupplier.OverDailyDownloadLimit() == true {
-			logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), "Over Daily Download Limit")
-			continue
-		}
+			if oneSupplier.OverDailyDownloadLimit() == true {
+				logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), "Over Daily Download Limit")
+				return
+			}
 
-		subInfos, err := OneMovieDlSubInOneSite(logger, oneVideoFullPath, i, oneSupplier)
-		if err != nil {
-			logger.Errorln(common.QueueName, i, oneSupplier.GetSupplierName(), "oneMovieDlSubInOneSite", err)
-			continue
-		}
-		outSUbInfos = append(outSUbInfos, subInfos...)
+			subInfos, err := OneMovieDlSubInOneSite(logger, oneVideoFullPath, i, oneSupplier)
+			if err != nil {
+				logger.Errorln(common.QueueName, i, oneSupplier.GetSupplierName(), "oneMovieDlSubInOneSite", err)
+				return
+			}
+			outMu.Lock()
+			outSUbInfos = append(outSUbInfos, subInfos...)
+			outMu.Unlock()
+		}()
 	}
+	supplierWorkers.Wait()
 
 	for index, info := range outSUbInfos {
 		logger.Debugln(common.QueueName, i, "OneMovieDlSubInAllSite get sub", index, "Name:", info.Name, "FileUrl:", info.FileUrl)

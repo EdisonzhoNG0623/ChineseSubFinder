@@ -55,16 +55,19 @@ func (s *Supplier) CheckAlive() (bool, int64) {
 	httpClient, err := pkg.NewHttpClient()
 	if err != nil {
 		s.log.Errorln(s.GetSupplierName(), "CheckAlive.NewHttpClient", err)
+		s.isAlive = false
 		return false, 0
 	}
-	searPageUrl := fmt.Sprintf(settings.Get().AdvancedSettings.SuppliersSettings.A4k.RootUrl)
+	searPageUrl := settings.Get().AdvancedSettings.SuppliersSettings.A4k.RootUrl
 	resp, err := httpClient.R().Get(searPageUrl)
 	if err != nil {
 		s.log.Errorln(s.GetSupplierName(), "CheckAlive.Get", err)
+		s.isAlive = false
 		return false, 0
 	}
 	if resp.StatusCode() != 200 {
 		s.log.Errorln(s.GetSupplierName(), "CheckAlive.StatusCode", resp.StatusCode())
+		s.isAlive = false
 		return false, 0
 	}
 	s.isAlive = true

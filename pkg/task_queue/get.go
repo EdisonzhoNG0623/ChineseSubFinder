@@ -59,39 +59,45 @@ func (t *TaskQueue) GetOneWaitingJob() (bool, task_queue2.OneJob, error) {
 	if t.isEmpty() == true {
 		return false, task_queue2.OneJob{}, nil
 	}
-	// 找到需要返回的复合条件的任务
-	found := false
-	tOneJob := task_queue2.OneJob{}
-	for TaskPriority := 0; TaskPriority <= taskPriorityCount; TaskPriority++ {
+	now := time.Now()
+	for taskPriority := 0; taskPriority <= taskPriorityCount; taskPriority++ {
+		found := false
+		selected := task_queue2.OneJob{}
+		selectedOrderTime := time.Time{}
 
-		t.taskPriorityMapList[TaskPriority].Any(func(key interface{}, value interface{}) bool {
-
-			tOneJob = value.(task_queue2.OneJob)
-			// 任务的 UpdateTime 与现在的时间大于单个字幕下载的间隔
-			// 默认是 12h, A.After(B) : A > B == true
-			// 见《任务队列设计》--以优先级顺序取出描述
-			if tOneJob.JobStatus == task_queue2.Waiting && (tOneJob.DownloadTimes == 0 ||
-				// 优先级 <= 3 也可以提前取出
-				TaskPriority <= HighTaskPriorityLevel ||
-				// 默认是 12h, A.After(B) : A > B == true
-				(time.Time)(tOneJob.UpdateTime).Add(time.Duration(settings.Get().AdvancedSettings.TaskQueue.OneSubDownloadInterval)*time.Hour).After(time.Now()) == false && tOneJob.DownloadTimes > 0) {
-				// 找到就返回
-				t.log.Debugln("tOneJob.UpdateTime", (time.Time)(tOneJob.UpdateTime).String())
-				t.log.Debugln("tOneJob.UpdateTime", (time.Time)(tOneJob.UpdateTime).Add(time.Duration(settings.Get().AdvancedSettings.TaskQueue.OneSubDownloadInterval)*time.Hour).String())
-				t.log.Debugln("tOneJob.UpdateTime is ", (time.Time)(tOneJob.UpdateTime).Add(time.Duration(settings.Get().AdvancedSettings.TaskQueue.OneSubDownloadInterval)*time.Hour).After(time.Now()))
-				found = true
-				return true
+		// Select the oldest eligible job within a priority. The old map.Any
+		// selection depended on hash iteration order and could starve jobs.
+		t.taskPriorityMapList[taskPriority].Each(func(key interface{}, value interface{}) {
+			oneJob := value.(task_queue2.OneJob)
+			if oneJob.JobStatus != task_queue2.Waiting {
+				return
 			}
 
-			return false
+			readyAt := nextAttemptAt(oneJob)
+			if !readyAt.IsZero() && readyAt.After(now) {
+				return
+			}
+
+			orderTime := readyAt
+			if orderTime.IsZero() {
+				orderTime = time.Time(oneJob.AddedTime)
+			}
+			if !found || orderTime.Before(selectedOrderTime) ||
+				(orderTime.Equal(selectedOrderTime) && time.Time(oneJob.AddedTime).Before(time.Time(selected.AddedTime))) {
+				found = true
+				selected = oneJob
+				selectedOrderTime = orderTime
+			}
 		})
 
-		if found == true {
-			return true, tOneJob, nil
+		if found {
+			t.log.Debugf("TaskQueue selected id=%s priority=%d attempts=%d ready_at=%s",
+				selected.Id, selected.TaskPriority, selected.DownloadTimes, nextAttemptAt(selected).Format(time.RFC3339))
+			return true, selected, nil
 		}
 	}
 
-	return false, tOneJob, nil
+	return false, task_queue2.OneJob{}, nil
 }
 
 // GetOneDoneJob 获取一个元素，按优先级，0 - taskPriorityCount 的级别去拿去任务，不会移除任务
@@ -105,36 +111,31 @@ func (t *TaskQueue) GetOneDoneJob() (bool, task_queue2.OneJob, error) {
 		return false, task_queue2.OneJob{}, nil
 	}
 
-	found := false
-	tOneJob := task_queue2.OneJob{}
-	for TaskPriority := 0; TaskPriority <= taskPriorityCount; TaskPriority++ {
+	now := time.Now()
+	for taskPriority := 0; taskPriority <= taskPriorityCount; taskPriority++ {
+		found := false
+		selected := task_queue2.OneJob{}
+		taskInterval := time.Duration(settings.Get().AdvancedSettings.TaskQueue.OneSubDownloadInterval) * time.Hour
 
-		t.taskPriorityMapList[TaskPriority].Any(func(key interface{}, value interface{}) bool {
-
-			tOneJob = value.(task_queue2.OneJob)
-			// 任务的 UpdateTime 与现在的时间大于单个字幕下载的间隔
-			// 默认是 12h, A.After(B) : A > B == true
-			// 见《任务队列设计》--以优先级顺序取出描述
-			if tOneJob.JobStatus == task_queue2.Done &&
-				// 要在 三个月内
-				(time.Time)(tOneJob.CreatedTime).AddDate(0, 0, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime).After(time.Now()) == true &&
-				// 已经下载过的视频，要间隔 12 小时再次下载
-				(time.Time)(tOneJob.UpdateTime).Add(
-					time.Duration(settings.Get().AdvancedSettings.TaskQueue.OneSubDownloadInterval)*time.Hour).After(time.Now()) == false {
-				// 找到就返回
-				found = true
-				return true
+		t.taskPriorityMapList[taskPriority].Each(func(key interface{}, value interface{}) {
+			oneJob := value.(task_queue2.OneJob)
+			if oneJob.JobStatus != task_queue2.Done ||
+				time.Time(oneJob.CreatedTime).AddDate(0, 0, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime).Before(now) ||
+				time.Time(oneJob.UpdateTime).Add(taskInterval).After(now) {
+				return
 			}
-
-			return false
+			if !found || time.Time(oneJob.UpdateTime).Before(time.Time(selected.UpdateTime)) {
+				found = true
+				selected = oneJob
+			}
 		})
 
-		if found == true {
-			return true, tOneJob, nil
+		if found {
+			return true, selected, nil
 		}
 	}
 
-	return false, tOneJob, nil
+	return false, task_queue2.OneJob{}, nil
 }
 
 func (t *TaskQueue) GetJobsByStatus(status task_queue2.JobStatus) (bool, []task_queue2.OneJob, error) {
