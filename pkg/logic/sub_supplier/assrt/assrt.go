@@ -27,6 +27,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const assrtDownloadTimeout = 4 * time.Minute
+
 type Supplier struct {
 	log               *logrus.Logger
 	fileDownloader    *file_downloader.FileDownloader
@@ -195,8 +197,9 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool) ([]suppli
 		// 这里需要注意的是 ASSRT 说明了，下载的地址是有时效性的，那么如果缓存整个地址则不是正确的
 		// 需要缓存的应该是这个字幕的 ID
 		nowSubDownloadUrl := oneSubDetail.Sub.Subs[0].Url
-		subInfo, err := s.fileDownloader.Get(s.GetSupplierName(), int64(index), videoFileName, nowSubDownloadUrl,
+		subInfo, err := s.fileDownloader.GetWithDownloadTimeout(s.GetSupplierName(), int64(index), videoFileName, nowSubDownloadUrl,
 			0, 0,
+			assrtDownloadTimeout,
 			// 得到一个特殊的替代 FileDownloadUrl 的特征字符串
 			fmt.Sprintf("%s-%s-%d", s.GetSupplierName(), subInfo.NativeName, subInfo.Id),
 		)

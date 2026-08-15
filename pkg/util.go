@@ -135,13 +135,27 @@ func GetPublicIP(log *logrus.Logger, queue *settings.TaskQueue) string {
 
 // DownFile 从指定的 url 下载文件
 func DownFile(l *logrus.Logger, urlStr string) ([]byte, string, error) {
-
-	var err error
-	var httpClient *resty.Client
-	httpClient, err = NewHttpClient()
+	httpClient, err := NewHttpClient()
 	if err != nil {
 		return nil, "", err
 	}
+	return downFileWithClient(l, urlStr, httpClient)
+}
+
+// DownFileWithTimeout downloads from slow providers with a provider-specific
+// timeout and no automatic retry. Retrying a large response from byte zero
+// can otherwise double the queue stall without making progress.
+func DownFileWithTimeout(l *logrus.Logger, urlStr string, timeout time.Duration) ([]byte, string, error) {
+	httpClient, err := NewHttpClient()
+	if err != nil {
+		return nil, "", err
+	}
+	httpClient.SetTimeout(timeout)
+	httpClient.SetRetryCount(0)
+	return downFileWithClient(l, urlStr, httpClient)
+}
+
+func downFileWithClient(l *logrus.Logger, urlStr string, httpClient *resty.Client) ([]byte, string, error) {
 	resp, err := httpClient.R().Get(urlStr)
 	if err != nil {
 		return nil, "", err

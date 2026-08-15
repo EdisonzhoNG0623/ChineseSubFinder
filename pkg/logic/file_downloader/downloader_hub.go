@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 
@@ -51,6 +52,23 @@ func (f *FileDownloader) GetName() string {
 // xunlei、shooter 使用这个
 func (f *FileDownloader) Get(supplierName string, topN int64, videoFileName string,
 	fileDownloadUrl string, score int64, offset int64, cacheString ...string) (*supplier.SubInfo, error) {
+	return f.get(supplierName, topN, videoFileName, fileDownloadUrl, score, offset, pkg.DownFile, cacheString...)
+}
+
+// GetWithDownloadTimeout is used by providers whose generated file URLs are
+// valid but can stream too slowly for the global one-minute HTTP timeout.
+func (f *FileDownloader) GetWithDownloadTimeout(supplierName string, topN int64, videoFileName string,
+	fileDownloadUrl string, score int64, offset int64, timeout time.Duration, cacheString ...string) (*supplier.SubInfo, error) {
+	download := func(log *logrus.Logger, url string) ([]byte, string, error) {
+		return pkg.DownFileWithTimeout(log, url, timeout)
+	}
+	return f.get(supplierName, topN, videoFileName, fileDownloadUrl, score, offset, download, cacheString...)
+}
+
+type downloadFileFunc func(log *logrus.Logger, url string) ([]byte, string, error)
+
+func (f *FileDownloader) get(supplierName string, topN int64, videoFileName string,
+	fileDownloadUrl string, score int64, offset int64, download downloadFileFunc, cacheString ...string) (*supplier.SubInfo, error) {
 
 	var fileUID string
 
@@ -66,7 +84,7 @@ func (f *FileDownloader) Get(supplierName string, topN int64, videoFileName stri
 	}
 	// 如果不存在那么就先下载，然后再存入缓存中
 	if found == false {
-		fileData, downloadFileName, err := pkg.DownFile(f.Log, fileDownloadUrl)
+		fileData, downloadFileName, err := download(f.Log, fileDownloadUrl)
 		if err != nil {
 			return nil, err
 		}
