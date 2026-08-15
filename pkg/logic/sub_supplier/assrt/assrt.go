@@ -27,7 +27,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const assrtDownloadTimeout = 4 * time.Minute
+const (
+	assrtDownloadTimeout = 6 * time.Minute
+	assrtMaxDownloadSize = 3 * 1024 * 1024
+)
 
 type Supplier struct {
 	log               *logrus.Logger
@@ -194,9 +197,14 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool) ([]suppli
 		if len(oneSubDetail.Sub.Subs) < 1 {
 			continue
 		}
+		downloadDetail := oneSubDetail.Sub.Subs[0]
+		if downloadDetail.Size > assrtMaxDownloadSize {
+			s.log.Warningf("assrt skip oversized subtitle bundle: id=%d size=%d limit=%d", subInfo.Id, downloadDetail.Size, assrtMaxDownloadSize)
+			continue
+		}
 		// 这里需要注意的是 ASSRT 说明了，下载的地址是有时效性的，那么如果缓存整个地址则不是正确的
 		// 需要缓存的应该是这个字幕的 ID
-		nowSubDownloadUrl := oneSubDetail.Sub.Subs[0].Url
+		nowSubDownloadUrl := downloadDetail.Url
 		subInfo, err := s.fileDownloader.GetWithDownloadTimeout(s.GetSupplierName(), int64(index), videoFileName, nowSubDownloadUrl,
 			0, 0,
 			assrtDownloadTimeout,
