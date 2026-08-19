@@ -21,4 +21,8 @@ const (
 	SubSubtitleBestSearchTVSeasonPackageUrl     = "/search-tv-season-package"
 	SubSubtitleBestSearchTVSeasonPackageByIDUrl = "/search-tv-season-package-id"
 	SubSubtitleBestGetDlURLUrl                  = "/get-dl-url"
+
+	SubDLRootURLDef     = "https://api.subdl.com"
+	SubDLSearchURL      = "/api/v1/subtitles"
+	SubDLDownloadURLDef = "https://dl.subdl.com"
 )

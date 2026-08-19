@@ -11,3 +11,13 @@ func seriesDownloadOutcomeError(savedSubCount int, saveErr error) error {
 	}
 	return saveErr
 }
+
+func seriesRequestedEpisodeOutcome(requestedEpisodeSaved bool, saveErr error) error {
+	if requestedEpisodeSaved {
+		return nil
+	}
+	if saveErr != nil {
+		return saveErr
+	}
+	return task_queue.ErrNoSubFound
+}

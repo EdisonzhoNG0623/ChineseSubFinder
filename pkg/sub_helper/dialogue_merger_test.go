@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_parser_hub"
+	"github.com/sirupsen/logrus"
 )
 
 func Test_isFirstLetterIsEngUpper(t *testing.T) {
@@ -62,7 +63,8 @@ func TestNewDialogueMerger(t *testing.T) {
 
 	testRootDir := unit_test_helper.GetTestDataResourceRootPath([]string{"FixTimeline", "org"}, 4, false)
 
-	subParserHub := sub_parser_hub.NewSubParserHub(ass.NewParser(), srt.NewParser())
+	logger := logrus.New()
+	subParserHub := sub_parser_hub.NewSubParserHub(logger, ass.NewParser(logger), srt.NewParser(logger))
 	//bFind, infoBase, err := subParserHub.DetermineFileTypeFromFile(filepath.Join(testRootDir, "2line-The Card Counter (2021) WEBDL-1080p.chinese(inside).ass"))
 	bFind, infoBase, err := subParserHub.DetermineFileTypeFromFile(filepath.Join(testRootDir, "2line-英_1_0-3-35#150_36#360000.srt"))
 	if err != nil {

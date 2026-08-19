@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/search"
@@ -47,10 +48,11 @@ type Supplier struct {
 	tt               time.Duration
 	operationTimeout time.Duration
 	isAlive          bool
+	requestLock      sync.Mutex
 }
 
 const (
-	subHDOperationTimeout    = 5 * time.Minute
+	subHDOperationTimeout    = 45 * time.Second
 	subHDBrowserCloseTimeout = 5 * time.Second
 )
 
@@ -60,9 +62,6 @@ func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
 	sup.log = fileDownloader.Log
 	sup.fileDownloader = fileDownloader
 
-	if settings.Get().AdvancedSettings.Topic != common.DownloadSubsPerSite {
-		settings.Get().AdvancedSettings.Topic = common.DownloadSubsPerSite
-	}
 	sup.isAlive = true // 默认是可以使用的，如果 check 后，再调整状态
 	sup.operationTimeout = subHDOperationTimeout
 
@@ -177,10 +176,14 @@ func (s *Supplier) GetSupplierName() string {
 }
 
 func (s *Supplier) GetSubListFromFile4Movie(filePath string) ([]supplier.SubInfo, error) {
+	s.requestLock.Lock()
+	defer s.requestLock.Unlock()
 	return s.getSubListFromFile4Movie(filePath)
 }
 
 func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	s.requestLock.Lock()
+	defer s.requestLock.Unlock()
 
 	// TODO 是用本地的 Browser 还是远程的，推荐是远程的
 	browser, closeBrowser, err := s.newBrowserWithTimeout(rod_helper.NewBrowserOptions(s.log, true, settings.Get()))
@@ -265,7 +268,7 @@ func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]s
 }
 
 func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
-	panic("not implemented")
+	return s.GetSubListFromFile4Series(seriesInfo)
 }
 
 func (s *Supplier) getSubListFromFile4Movie(filePath string) ([]supplier.SubInfo, error) {

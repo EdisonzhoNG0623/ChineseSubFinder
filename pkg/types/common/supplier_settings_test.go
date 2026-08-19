@@ -17,6 +17,32 @@ func TestSuppliersSettingsUsesCurrentZimukuDomain(t *testing.T) {
 		t.Fatalf("restored browser suppliers must default to unlimited: Zimuku=%d SubHD=%d",
 			supplierSettings.Zimuku.DailyDownloadLimit, supplierSettings.SubHD.DailyDownloadLimit)
 	}
+	if supplierSettings.A4k.DailyDownloadLimit != 0 {
+		t.Fatalf("retired A4K supplier must default to disabled, got %d", supplierSettings.A4k.DailyDownloadLimit)
+	}
+}
+
+func TestSuppliersSettingsDisablesRetiredA4kDomain(t *testing.T) {
+	supplierSettings := settings.NewSuppliersSettings()
+	supplierSettings.A4k.DailyDownloadLimit = -1
+
+	supplierSettings.ReSetSearchUrl()
+
+	if supplierSettings.A4k.DailyDownloadLimit != 0 {
+		t.Fatalf("retired A4K endpoint remained enabled: %d", supplierSettings.A4k.DailyDownloadLimit)
+	}
+}
+
+func TestSuppliersSettingsKeepsCustomA4kMirrorEnabled(t *testing.T) {
+	supplierSettings := settings.NewSuppliersSettings()
+	supplierSettings.A4k.RootUrl = "https://a4k.example"
+	supplierSettings.A4k.DailyDownloadLimit = -1
+
+	supplierSettings.ReSetSearchUrl()
+
+	if supplierSettings.A4k.DailyDownloadLimit != -1 {
+		t.Fatalf("custom A4K mirror was disabled: %d", supplierSettings.A4k.DailyDownloadLimit)
+	}
 }
 
 func TestOneSupplierSettingsDailyDownloadLimit(t *testing.T) {

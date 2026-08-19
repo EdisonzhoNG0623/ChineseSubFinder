@@ -8,7 +8,7 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/log_helper"
+
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/task_queue"
 	common2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 	taskQueue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
@@ -22,7 +22,18 @@ type queueWorkerPanic struct {
 func (d *Downloader) queueDownloaderLocal() {
 
 	d.log.Debugln("Download.QueueDownloader() Try Start ...")
-	d.downloaderLock.Lock()
+	d.queueMaintenanceLock.RLock()
+	defer d.queueMaintenanceLock.RUnlock()
+	didWork := false
+	defer func() { d.finishQueueWorker(didWork) }()
+
+	d.queueClaimLock.Lock()
+	claimLockHeld := true
+	defer func() {
+		if claimLockHeld {
+			d.queueClaimLock.Unlock()
+		}
+	}()
 	d.log.Debugln("Download.QueueDownloader() Start ...")
 
 	defer func() {
@@ -30,16 +41,18 @@ func (d *Downloader) queueDownloaderLocal() {
 			d.log.Errorln("Downloader.QueueDownloader() panic")
 			pkg.PrintPanicStack(d.log)
 		}
-		d.downloaderLock.Unlock()
 		d.log.Debugln("Download.QueueDownloader() End")
 	}()
 
-	var downloadCounter int64
-	downloadCounter = 0
+	nowSubSupplierHub := d.getSubSupplierHub()
+	if nowSubSupplierHub == nil {
+		d.log.Debugln("Download.QueueDownloader() supplier hub is not ready")
+		return
+	}
 	// 移除查过三个月的 Done 任务
 	d.downloadQueue.BeforeGetOneJob()
 	// 从队列取数据出来，见《任务生命周期》
-	bok, oneJob, err := d.downloadQueue.GetOneJob()
+	bok, oneJob, err := d.downloadQueue.GetOneJobExcludingSeries(d.activeSeriesSnapshot())
 	if err != nil {
 		d.log.Errorln("d.downloadQueue.GetOneWaitingJob()", err)
 		return
@@ -177,7 +190,7 @@ func (d *Downloader) queueDownloaderLocal() {
 		if oneJob.TaskPriority > task_queue.HighTaskPriorityLevel {
 			// 优先级大于 3，那么就不是很急的任务，才需要判断
 			if oneJob.VideoType == common2.Movie {
-				if d.subSupplierHub.MovieNeedDlSub(d.fileDownloader.MediaInfoDealers, oneJob.VideoFPath, false) == false {
+				if nowSubSupplierHub.MovieNeedDlSub(d.fileDownloader.MediaInfoDealers, oneJob.VideoFPath, false) == false {
 					// 需要标记忽略
 					oneJob.JobStatus = taskQueue2.Ignore
 					bok, err = d.downloadQueue.Update(oneJob)
@@ -194,7 +207,7 @@ func (d *Downloader) queueDownloaderLocal() {
 				}
 			} else if oneJob.VideoType == common2.Series {
 
-				bNeedDlSub, seriesInfo, err := d.subSupplierHub.SeriesNeedDlSub(
+				bNeedDlSub, seriesInfo, err := nowSubSupplierHub.SeriesNeedDlSub(
 					d.fileDownloader.MediaInfoDealers,
 					oneJob.SeriesRootDirPath,
 					false, false)
@@ -246,17 +259,15 @@ func (d *Downloader) queueDownloaderLocal() {
 		d.log.Errorln("d.downloadQueue.Update() Failed")
 		return
 	}
-	// ------------------------------------------------------------------------
-	// 开始标记，这个是单次扫描的开始，要注意格式，在日志的内部解析识别单个日志开头的时候需要特殊的格式
-	d.log.Infoln("------------------------------------------")
-	d.log.Infoln(log_helper.OnceSubsScanStart + "#" + oneJob.Id)
-	// ------------------------------------------------------------------------
-	defer func() {
-		d.log.Infoln(log_helper.OnceSubsScanEnd)
-		d.log.Infoln("------------------------------------------")
-	}()
+	unregisterSeries := d.registerSeriesWorker(oneJob.SeriesRootDirPath)
+	defer unregisterSeries()
+	didWork = true
+	d.queueClaimLock.Unlock()
+	claimLockHeld = false
+	endQueueLog := d.startQueueLog(oneJob.Id)
+	defer endQueueLog()
 
-	downloadCounter++
+	downloadCounter := d.queueDownloadCounter.Add(1)
 	// 创建一个 chan 用于任务的中断和超时
 	done := make(chan interface{}, 1)
 	// 接收内部任务的 panic
@@ -269,16 +280,9 @@ func (d *Downloader) queueDownloaderLocal() {
 			}
 			close(done)
 			close(panicChan)
-			// 每下载完毕一次，进行一次缓存和 Chrome 的清理
-			err = pkg.ClearRootTmpFolder()
-			if err != nil {
-				d.log.Error("ClearRootTmpFolder", err)
-			}
-
-			if pkg.LiteMode() == false {
-				pkg.CloseChrome(d.log)
-			}
 		}()
+		unlockSeries := d.lockSeriesWorker(oneJob.SeriesRootDirPath)
+		defer unlockSeries()
 
 		if oneJob.VideoType == common2.Movie {
 			// 电影

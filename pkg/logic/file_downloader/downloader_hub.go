@@ -67,6 +67,15 @@ func (f *FileDownloader) GetWithDownloadTimeout(supplierName string, topN int64,
 
 type downloadFileFunc func(log *logrus.Logger, url string) ([]byte, string, error)
 
+// GetWithCustomDownloader lets a supplier keep credential-bearing request URLs
+// out of shared logs and cache records while retaining normal cache and daily
+// download count behavior. fileDownloadURL must be credential-free.
+func (f *FileDownloader) GetWithCustomDownloader(supplierName string, topN int64, videoFileName string,
+	fileDownloadURL string, score int64, offset int64,
+	download func(log *logrus.Logger, url string) ([]byte, string, error), cacheString ...string) (*supplier.SubInfo, error) {
+	return f.get(supplierName, topN, videoFileName, fileDownloadURL, score, offset, download, cacheString...)
+}
+
 func (f *FileDownloader) get(supplierName string, topN int64, videoFileName string,
 	fileDownloadUrl string, score int64, offset int64, download downloadFileFunc, cacheString ...string) (*supplier.SubInfo, error) {
 

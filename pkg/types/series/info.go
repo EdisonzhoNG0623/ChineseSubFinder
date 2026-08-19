@@ -6,11 +6,13 @@ import (
 )
 
 /*
-	这里只需要分为三层结构，因为有 sonarr 和 TMM 整理过
-	所以命名很标注，使用 GetVideoInfoFromFileName 读取 SxxExx 问题不大
+这里只需要分为三层结构，因为有 sonarr 和 TMM 整理过
+所以命名很标注，使用 GetVideoInfoFromFileName 读取 SxxExx 问题不大
 */
 type SeriesInfo struct {
 	ImdbId           string
+	TmdbId           string
+	TvdbId           string
 	Name             string
 	Year             int
 	ReleaseDate      string
@@ -26,6 +28,13 @@ type EpisodeInfo struct {
 	Title                    string
 	Season                   int
 	Episode                  int
+	// Alternate numbering is additive metadata. Zero means unresolved, so
+	// existing callers that only know aired SxxEyy remain compatible.
+	AbsoluteEpisode          int
+	SceneSeason              int
+	SceneEpisode             int
+	NumberingSource          string
+	NumberingConfidence      float64
 	SubAlreadyDownloadedList []SubInfo // 已经下载在当前视频目录下的字幕列表
 	Dir                      string    // 这里需要记录字幕的位置，因为需要在同级目录匹配相应的字幕才行
 	FileFullPath             string    // 视频文件的全路径

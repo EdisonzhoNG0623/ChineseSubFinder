@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/preview_queue"
 
@@ -39,12 +40,28 @@ type Downloader struct {
 	fileDownloader           *file_downloader.FileDownloader
 	ctx                      context.Context
 	cancel                   context.CancelFunc
-	subSupplierHub           *subSupplier.SubSupplierHub                      // 字幕提供源的集合，这个需要定时进行扫描，这些字幕源是否有效，以及下载验证码信息
-	mk                       *markSystem.MarkingSystem                        // MarkingSystem，字幕的评价系统
-	subFormatter             ifaces.ISubFormatter                             // 字幕格式化命名的实现
-	subNameFormatter         subCommon.FormatterName                          // 从 inSubFormatter 推断出来
-	subTimelineFixerHelperEx *sub_timeline_fixer.SubTimelineFixerHelperEx     // 字幕时间轴校正
-	downloaderLock           sync.Mutex                                       // 取消执行 task control 的 Lock
+	subSupplierHub           *subSupplier.SubSupplierHub // 字幕提供源的集合，这个需要定时进行扫描，这些字幕源是否有效，以及下载验证码信息
+	subSupplierHubLock       sync.RWMutex
+	mk                       *markSystem.MarkingSystem                    // MarkingSystem，字幕的评价系统
+	subFormatter             ifaces.ISubFormatter                         // 字幕格式化命名的实现
+	subNameFormatter         subCommon.FormatterName                      // 从 inSubFormatter 推断出来
+	subTimelineFixerHelperEx *sub_timeline_fixer.SubTimelineFixerHelperEx // 字幕时间轴校正
+	downloaderLock           sync.Mutex                                   // 取消执行 task control 的 Lock
+	queueMaintenanceLock     sync.RWMutex
+	queueClaimLock           sync.Mutex
+	queueWorkerStateLock     sync.Mutex
+	queueLaunchLock          sync.Mutex
+	queueWorkerWG            sync.WaitGroup
+	acceptQueueWorkers       bool
+	queueWorkerSlots         chan struct{}
+	activeQueueWorkers       int
+	activeSeriesWorkers      map[string]int
+	queueCleanupPending      bool
+	queueLogLock             sync.Mutex
+	queueLogActive           int
+	queueLogBatchID          string
+	queueDownloadCounter     atomic.Int64
+	seriesWorkerLocks        sync.Map
 	downloadQueue            *task_queue.TaskQueue                            // 需要下载的视频的队列
 	embyHelper               *embyHelper.EmbyHelper                           // Emby 的实例
 	ScanLogic                *scan_logic.ScanLogic                            // 是否扫描逻辑
@@ -91,6 +108,9 @@ func NewDownloader(inSubFormatter ifaces.ISubFormatter, fileDownloader *file_dow
 	downloader.downloadQueue = downloadQueue
 	// 单个任务的超时设置
 	downloader.ctx, downloader.cancel = context.WithCancel(context.Background())
+	downloader.queueWorkerSlots = make(chan struct{}, 2)
+	downloader.acceptQueueWorkers = true
+	downloader.activeSeriesWorkers = make(map[string]int)
 	// 用于字幕下载后的刷新
 	if settings.Get().EmbySettings.Enable == true {
 		downloader.embyHelper = embyHelper.NewEmbyHelper(downloader.fileDownloader.MediaInfoDealers)
@@ -125,12 +145,14 @@ func (d *Downloader) SupplierCheck() {
 			d.log.Errorln("Downloader.SupplierCheck() panic")
 			pkg.PrintPanicStack(d.log)
 		}
+		d.queueMaintenanceLock.Unlock()
 		d.downloaderLock.Unlock()
 
 		d.log.Infoln("Download.SupplierCheck() End")
 	}()
 
 	d.downloaderLock.Lock()
+	d.queueMaintenanceLock.Lock()
 	d.log.Infoln("Download.SupplierCheck() Start ...")
 
 	//// 创建一个 chan 用于任务的中断和超时
@@ -154,7 +176,7 @@ func (d *Downloader) SupplierCheck() {
 		// 这里是调试使用的，指定了只用一个字幕源
 		//subSupplierHub := subSupplier.NewSubSupplierHub(csf.NewSupplier(d.fileDownloader))
 		subSupplierHub := subSupplier.NewSubSupplierHub(assrt.NewSupplier(d.fileDownloader))
-		d.subSupplierHub = subSupplierHub
+		d.setSubSupplierHub(subSupplierHub)
 	} else {
 
 		preDownloadProcess := pre_download_process.NewPreDownloadProcess(d.fileDownloader)
@@ -164,7 +186,7 @@ func (d *Downloader) SupplierCheck() {
 			d.log.Errorln(errors.New(fmt.Sprintf("NewPreDownloadProcess Error: %v", err)))
 		} else {
 			// 更新 SubSupplierHub 实例
-			d.subSupplierHub = preDownloadProcess.SubSupplierHub
+			d.setSubSupplierHub(preDownloadProcess.SubSupplierHub)
 			//done <- nil
 		}
 	}
@@ -191,17 +213,31 @@ func (d *Downloader) SupplierCheck() {
 
 // QueueDownloader 从字幕队列中取一个视频的字幕下载任务出来，并且开始下载
 func (d *Downloader) QueueDownloader() {
+	d.queueLaunchLock.Lock()
+	if !d.acceptQueueWorkers || !d.tryStartQueueWorker() {
+		d.queueLaunchLock.Unlock()
+		return
+	}
+	d.queueWorkerWG.Add(1)
+	d.queueLaunchLock.Unlock()
 
-	// 本地的任务
-	d.queueDownloaderLocal()
-	// 云端分布式的任务
-	d.queueDownloaderCloud()
+	go func() {
+		defer d.queueWorkerWG.Done()
+		// 本地的任务
+		d.queueDownloaderLocal()
+		// 云端分布式的任务
+		d.queueDownloaderCloud()
+	}()
 }
 
 func (d *Downloader) Cancel() {
 	if d == nil {
 		return
 	}
+	d.queueLaunchLock.Lock()
+	d.acceptQueueWorkers = false
 	d.cancel()
+	d.queueLaunchLock.Unlock()
+	d.queueWorkerWG.Wait()
 	d.log.Infoln("Downloader.Cancel()")
 }

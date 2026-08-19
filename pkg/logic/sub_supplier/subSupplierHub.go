@@ -3,6 +3,7 @@ package sub_supplier
 import (
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 
@@ -187,6 +188,7 @@ func (d *SubSupplierHub) CheckSubSiteStatus() backend.ReplyCheckStatus {
 	outStatus := backend.ReplyCheckStatus{
 		SubSiteStatus: make([]backend.SiteStatus, 0),
 	}
+	skippedSuppliers := make(map[string]struct{})
 
 	var wg sync.WaitGroup
 
@@ -196,16 +198,26 @@ func (d *SubSupplierHub) CheckSubSiteStatus() backend.ReplyCheckStatus {
 		wg.Add(1)
 		go func(supplier ifaces.ISupplier) {
 			defer wg.Done()
+			name := supplier.GetSupplierName()
+			if probe, nextProbe := processSupplierHealthCooldown.shouldProbe(name, time.Now()); !probe {
+				d.log.Infof("%s Check Alive skipped until %s after repeated failures", name, nextProbe.Format(time.RFC3339))
+				d.locker.Lock()
+				skippedSuppliers[name] = struct{}{}
+				outStatus.SubSiteStatus = append(outStatus.SubSiteStatus, backend.SiteStatus{Name: name, Valid: false})
+				d.locker.Unlock()
+				return
+			}
 			bAlive, speed := supplier.CheckAlive()
+			processSupplierHealthCooldown.record(name, bAlive, time.Now())
 			if bAlive == false {
-				d.log.Warningln(supplier.GetSupplierName(), "Check Alive = false")
+				d.log.Warningln(name, "Check Alive = false")
 			} else {
-				d.log.Infoln(supplier.GetSupplierName(), "Check Alive = true, Speed =", speed, "ms")
+				d.log.Infoln(name, "Check Alive = true, Speed =", speed, "ms")
 			}
 
 			d.locker.Lock()
 			outStatus.SubSiteStatus = append(outStatus.SubSiteStatus, backend.SiteStatus{
-				Name:  supplier.GetSupplierName(),
+				Name:  name,
 				Valid: bAlive,
 				Speed: speed,
 			})
@@ -219,7 +231,8 @@ func (d *SubSupplierHub) CheckSubSiteStatus() backend.ReplyCheckStatus {
 	for i := 0; i < suppliersLen; {
 
 		// 网络检测是否有效，以及每次的下载次数限制检测
-		if d.Suppliers[i].IsAlive() == false || d.Suppliers[i].OverDailyDownloadLimit() == true {
+		name := d.Suppliers[i].GetSupplierName()
+		if shouldRemoveSupplier(name, skippedSuppliers, d.Suppliers[i].IsAlive(), d.Suppliers[i].OverDailyDownloadLimit()) {
 
 			d.DelSubSupplier(d.Suppliers[i])
 			// 删除后，从头再来

@@ -1,6 +1,12 @@
 package mark_system
 
 import (
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_parser/ass"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_parser/srt"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_helper"
@@ -29,26 +35,23 @@ func NewMarkingSystem(log *logrus.Logger, subSiteSequence []string, subTypePrior
 func (m MarkingSystem) SelectOneSubFile(organizeSubFiles []string) *subparser.FileInfo {
 	var finalSubFile *subparser.FileInfo
 	subInfoDict := m.parseSubFileInfo(organizeSubFiles)
-	// 优先级别暂定 subSiteSequence: zimuku -> subhd -> xunlei -> shooter
+	infos := m.orderByGlobalRank(subInfoDict)
 	// 这里需要循环四轮：
 	// 第一轮，双语、字幕类型自定义，优先
 	// 第二轮，单语言（中文）、字幕类型自定义，优先
 	// 第三轮，双语、字幕类型0，优先
 	// 第四轮，单语言（中文）、字幕类型0，优先
 	for i := 0; i < 4; i++ {
-		for _, subSite := range m.subSiteSequence {
-			infos, ok := subInfoDict[subSite]
-			if ok == false {
-				continue
-			}
+		for index := range infos {
+			one := infos[index : index+1]
 			if i == 0 {
-				finalSubFile = sub_helper.SelectChineseBestBilingualSubtitle(infos, m.SubTypePriority)
+				finalSubFile = sub_helper.SelectChineseBestBilingualSubtitle(one, m.SubTypePriority)
 			} else if i == 1 {
-				finalSubFile = sub_helper.SelectChineseBestSubtitle(infos, m.SubTypePriority)
+				finalSubFile = sub_helper.SelectChineseBestSubtitle(one, m.SubTypePriority)
 			} else if i == 2 {
-				finalSubFile = sub_helper.SelectChineseBestBilingualSubtitle(infos, 0)
+				finalSubFile = sub_helper.SelectChineseBestBilingualSubtitle(one, 0)
 			} else if i == 3 {
-				finalSubFile = sub_helper.SelectChineseBestSubtitle(infos, 0)
+				finalSubFile = sub_helper.SelectChineseBestSubtitle(one, 0)
 			}
 			if finalSubFile != nil {
 				return finalSubFile
@@ -56,6 +59,47 @@ func (m MarkingSystem) SelectOneSubFile(organizeSubFiles []string) *subparser.Fi
 		}
 	}
 	return nil
+}
+
+var globalRankPrefix = regexp.MustCompile(`^\[[[:alnum:]_]+\]_([0-9]+)_`)
+
+func (m MarkingSystem) orderByGlobalRank(bySite map[string][]subparser.FileInfo) []subparser.FileInfo {
+	infos := make([]subparser.FileInfo, 0)
+	for _, siteInfos := range bySite {
+		infos = append(infos, siteInfos...)
+	}
+	siteOrder := make(map[string]int, len(m.subSiteSequence))
+	for index, site := range m.subSiteSequence {
+		siteOrder[strings.ToLower(site)] = index
+	}
+	sort.SliceStable(infos, func(i, j int) bool {
+		leftRank, rightRank := globalRank(infos[i].FileFullPath), globalRank(infos[j].FileFullPath)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		leftSite, leftKnown := siteOrder[strings.ToLower(infos[i].FromWhereSite)]
+		rightSite, rightKnown := siteOrder[strings.ToLower(infos[j].FromWhereSite)]
+		if leftKnown != rightKnown {
+			return leftKnown
+		}
+		if leftKnown && leftSite != rightSite {
+			return leftSite < rightSite
+		}
+		return infos[i].FileFullPath < infos[j].FileFullPath
+	})
+	return infos
+}
+
+func globalRank(path string) int64 {
+	match := globalRankPrefix.FindStringSubmatch(filepath.Base(path))
+	if len(match) != 2 {
+		return 1<<62 - 1
+	}
+	rank, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil || rank <= 0 {
+		return 1<<62 - 1
+	}
+	return rank
 }
 
 // SelectEachSiteTop1SubFile 每个网站最优的文件

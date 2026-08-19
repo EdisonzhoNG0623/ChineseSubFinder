@@ -34,6 +34,12 @@ type Supplier struct {
 	isAlive        bool
 }
 
+const a4kHealthCheckTimeout = 15 * time.Second
+
+func configureHealthCheckClient(client *resty.Client) *resty.Client {
+	return client.SetTimeout(a4kHealthCheckTimeout).SetRetryCount(0)
+}
+
 func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
 
 	sup := Supplier{}
@@ -41,14 +47,15 @@ func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
 	sup.fileDownloader = fileDownloader
 	sup.isAlive = true // 默认是可以使用的，如果 check 后，再调整状态
 
-	if settings.Get().AdvancedSettings.Topic != common2.DownloadSubsPerSite {
-		settings.Get().AdvancedSettings.Topic = common2.DownloadSubsPerSite
-	}
-
 	return &sup
 }
 
 func (s *Supplier) CheckAlive() (bool, int64) {
+	oneSettings := settings.Get().AdvancedSettings.SuppliersSettings.A4k
+	if oneSettings == nil || oneSettings.DailyDownloadLimit == 0 {
+		s.isAlive = false
+		return false, 0
+	}
 
 	// 计算当前时间
 	startT := time.Now()
@@ -58,6 +65,7 @@ func (s *Supplier) CheckAlive() (bool, int64) {
 		s.isAlive = false
 		return false, 0
 	}
+	httpClient = configureHealthCheckClient(httpClient)
 	searPageUrl := settings.Get().AdvancedSettings.SuppliersSettings.A4k.RootUrl
 	resp, err := httpClient.R().Get(searPageUrl)
 	if err != nil {
@@ -70,8 +78,23 @@ func (s *Supplier) CheckAlive() (bool, int64) {
 		s.isAlive = false
 		return false, 0
 	}
+	if !isA4kSubtitlePage(resp.String()) {
+		s.log.Warningln(s.GetSupplierName(), "CheckAlive unexpected page; endpoint may be parked or incompatible")
+		s.isAlive = false
+		return false, 0
+	}
 	s.isAlive = true
 	return true, time.Since(startT).Milliseconds()
+}
+
+func isA4kSubtitlePage(body string) bool {
+	normalized := strings.ToLower(body)
+	for _, parkedMarker := range []string{"namebright", "dropcatch", "domain for sale", "is coming soon"} {
+		if strings.Contains(normalized, parkedMarker) {
+			return false
+		}
+	}
+	return strings.Contains(body, "A4K字幕") || strings.Contains(normalized, "sub-item-list")
 }
 
 func (s *Supplier) IsAlive() bool {
@@ -212,10 +235,8 @@ func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]s
 		downloadCounter := 0
 		for _, searchResultItem := range searchResultItems {
 
-			if episodeInfo.Season == searchResultItem.Season && episodeInfo.Episode == searchResultItem.Episode {
-				// Season 和 Eps 匹配上再继续下载
-			} else if episodeInfo.Season == searchResultItem.Season && searchResultItem.IsFullSeason == true {
-				// Season 匹配上，Eps 为 0 则下载，全季
+			if !a4kResultMatchesEpisode(searchResultItem, episodeInfo.Season, episodeInfo.Episode) {
+				continue
 			}
 			downloadPageUrl := settings.Get().AdvancedSettings.SuppliersSettings.A4k.RootUrl + searchResultItem.RUrl
 			// 注意这里传入的 Season Episode 是这个字幕下载时候解析出来的信息
@@ -238,8 +259,11 @@ func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]s
 }
 
 func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	return s.GetSubListFromFile4Series(seriesInfo)
+}
 
-	panic("not implemented")
+func a4kResultMatchesEpisode(item SearchResultItem, season, episode int) bool {
+	return item.Season == season && (item.Episode == episode || item.IsFullSeason)
 }
 
 // searchKeyword 通过关键词获取所有的字幕列表

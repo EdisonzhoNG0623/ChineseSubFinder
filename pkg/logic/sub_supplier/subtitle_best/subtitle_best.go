@@ -6,9 +6,9 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/mix_media_info"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
-	common2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/supplier"
+	"github.com/go-resty/resty/v2"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"time"
@@ -24,6 +24,12 @@ type Supplier struct {
 	dailyDownloadLimit int
 }
 
+const subtitleBestHealthCheckTimeout = 25 * time.Second
+
+func configureHealthCheckClient(client *resty.Client) *resty.Client {
+	return client.SetTimeout(subtitleBestHealthCheckTimeout).SetRetryCount(0)
+}
+
 func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
 
 	sup := Supplier{}
@@ -33,10 +39,6 @@ func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
 	sup.isAlive = true // 默认是可以使用的，如果 check 后，再调整状态
 	sup.dailyDownloadCount = 0
 	sup.dailyDownloadLimit = 0
-
-	if settings.Get().AdvancedSettings.Topic != common2.DownloadSubsPerSite {
-		settings.Get().AdvancedSettings.Topic = common2.DownloadSubsPerSite
-	}
 
 	return &sup
 }
@@ -57,6 +59,7 @@ func (s *Supplier) CheckAlive() (bool, int64) {
 		s.log.Errorln(s.GetSupplierName(), "CheckAlive", "Error", err)
 		return false, 0
 	}
+	client = configureHealthCheckClient(client)
 	_, limitInfo, err := s.api.QueryMovieSubtitle(client, "tt00000")
 	if err != nil {
 		s.log.Errorln(s.GetSupplierName(), "CheckAlive.QueryMovieSubtitle", "Error", err)

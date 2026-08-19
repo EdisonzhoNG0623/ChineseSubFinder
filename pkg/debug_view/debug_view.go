@@ -44,7 +44,7 @@ func SaveDebugChartBase(vadList []vad.VADInfo, title, subTitle string) error {
 		AddSeries("VAD", lineData)
 
 	// Where the magic happens
-	f, err := os.Create(filepath.Join(pkg.DefDebugFolder, title+".html"))
+	f, err := os.Create(filepath.Join(pkg.DefDebugFolder(), title+".html"))
 	if err != nil {
 		return err
 	}

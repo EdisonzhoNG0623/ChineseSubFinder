@@ -28,13 +28,30 @@ func retryDelay(oneJob taskQueue2.OneJob) time.Duration {
 
 	switch {
 	case isNoSubError(message):
-		return exponentialBackoff(noSubRetryBase, noSubRetryMax, attempts)
+		return noSubRetryDelay(attempts)
 	case isTransientError(message):
 		return exponentialBackoff(transientRetryBase, transientRetryMax, attempts)
 	case isPersistentLocalError(message):
 		return exponentialBackoff(persistentRetryBase, persistentRetryMax, attempts)
 	default:
 		return exponentialBackoff(unknownRetryBase, unknownRetryMax, attempts)
+	}
+}
+
+// noSubRetryDelay keeps one relatively quick retry for newly released media,
+// then backs off aggressively. Re-querying every one or two days after
+// repeated empty results wastes supplier quota without materially improving
+// the hit rate of a large historical queue.
+func noSubRetryDelay(attempts int) time.Duration {
+	switch {
+	case attempts <= 1:
+		return noSubRetryBase
+	case attempts == 2:
+		return 2 * 24 * time.Hour
+	case attempts == 3:
+		return 7 * 24 * time.Hour
+	default:
+		return noSubRetryMax
 	}
 }
 
@@ -54,6 +71,8 @@ func exponentialBackoff(base, maximum time.Duration, attempts int) time.Duration
 
 func isNoSubError(message string) bool {
 	return strings.Contains(message, "no sub found") ||
+		strings.Contains(message, "all site download sub not found") ||
+		strings.Contains(message, "no sub downloaded") ||
 		strings.Contains(message, "not one fit") ||
 		strings.Contains(message, "no subtitle found")
 }
@@ -101,10 +120,16 @@ func nextAttemptAt(oneJob taskQueue2.OneJob) time.Time {
 	if oneJob.ForceRun || oneJob.DownloadTimes == 0 {
 		return time.Time{}
 	}
+	calculated := time.Time(oneJob.UpdateTime).Add(retryDelay(oneJob))
 	if explicit := time.Time(oneJob.NextAttemptTime); !isUnsetRetryTime(explicit) {
-		return explicit
+		// Persisted schedules may have been written by an older, more aggressive
+		// policy. Keep an explicit later time, but apply the current minimum now.
+		if explicit.After(calculated) {
+			return explicit
+		}
+		return calculated
 	}
-	return time.Time(oneJob.UpdateTime).Add(retryDelay(oneJob))
+	return calculated
 }
 
 // emby.Time serializes its zero value as "0001-01-01T00:00:00" and parses

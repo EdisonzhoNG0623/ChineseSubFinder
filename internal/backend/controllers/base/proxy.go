@@ -2,6 +2,7 @@ package base
 
 import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subdl"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subhd"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subtitle_best"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/zimuku"
@@ -71,8 +72,10 @@ func (cb *ControllerBase) CheckProxyHandler(c *gin.Context) {
 		// 这里无需传递下载字幕的缓存实例
 		xunlei.NewSupplier(cb.fileDownloader),
 		shooter.NewSupplier(cb.fileDownloader),
-		a4k.NewSupplier(cb.fileDownloader),
 	)
+	if a4kSettings := settings.Get().AdvancedSettings.SuppliersSettings.A4k; a4kSettings != nil && a4kSettings.DailyDownloadLimit != 0 {
+		subSupplierHub.AddSubSupplier(a4k.NewSupplier(cb.fileDownloader))
+	}
 	if pkg.LiteMode() == false {
 		subSupplierHub.AddSubSupplier(zimuku.NewSupplier(cb.fileDownloader))
 		subSupplierHub.AddSubSupplier(subhd.NewSupplier(cb.fileDownloader))
@@ -88,6 +91,10 @@ func (cb *ControllerBase) CheckProxyHandler(c *gin.Context) {
 		settings.Get().SubtitleSources.SubtitleBestSettings.ApiKey != "" {
 		// 如果开启了 SubtitleBest 字幕源，则需要测试 ASSRt 的代理
 		subSupplierHub.AddSubSupplier(subtitle_best.NewSupplier(cb.fileDownloader))
+	}
+	if settings.Get().SubtitleSources.SubDLSettings.Enabled &&
+		settings.Get().SubtitleSources.SubDLSettings.ApiKey != "" {
+		subSupplierHub.AddSubSupplier(subdl.NewSupplier(cb.fileDownloader))
 	}
 
 	outStatus := subSupplierHub.CheckSubSiteStatus()

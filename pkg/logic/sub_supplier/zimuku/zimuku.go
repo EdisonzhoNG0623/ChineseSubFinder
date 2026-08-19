@@ -49,10 +49,6 @@ func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
 	sup.fileDownloader = fileDownloader
 	sup.isAlive = true // 默认是可以使用的，如果 check 后，再调整状态
 
-	if settings.Get().AdvancedSettings.Topic != common.DownloadSubsPerSite {
-		settings.Get().AdvancedSettings.Topic = common.DownloadSubsPerSite
-	}
-
 	// 默认超时是 2 * 60s，如果是调试模式则是 5 min
 	sup.tt = common.BrowserTimeOut
 	if settings.Get().AdvancedSettings.DebugMode == true {
@@ -270,7 +266,7 @@ func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]s
 }
 
 func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
-	panic("not implemented")
+	return s.GetSubListFromFile4Series(seriesInfo)
 }
 
 func (s *Supplier) getSubListFromMovie(browser *rod.Browser, fileFPath string) ([]supplier.SubInfo, error) {

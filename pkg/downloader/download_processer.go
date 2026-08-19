@@ -20,7 +20,11 @@ import (
 
 func (d *Downloader) movieDlFunc(ctx context.Context, job taskQueue2.OneJob, downloadIndex int64) error {
 
-	nowSubSupplierHub := d.subSupplierHub
+	nowSubSupplierHub := d.getSubSupplierHub()
+	if nowSubSupplierHub == nil {
+		d.log.Infoln("Wait SupplierCheck Update *subSupplierHub, movieDlFunc Skip this time")
+		return nil
+	}
 	if nowSubSupplierHub.Suppliers == nil || len(nowSubSupplierHub.Suppliers) < 1 {
 		d.log.Infoln("Wait SupplierCheck Update *subSupplierHub, movieDlFunc Skip this time")
 		return nil
@@ -72,7 +76,7 @@ func (d *Downloader) movieDlFunc(ctx context.Context, job taskQueue2.OneJob, dow
 
 func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, downloadIndex int64) error {
 
-	nowSubSupplierHub := d.subSupplierHub
+	nowSubSupplierHub := d.getSubSupplierHub()
 	if nowSubSupplierHub == nil || nowSubSupplierHub.Suppliers == nil || len(nowSubSupplierHub.Suppliers) < 1 {
 		d.log.Infoln("Wait SupplierCheck Update *subSupplierHub, movieDlFunc Skip this time")
 		return nil
@@ -113,6 +117,8 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 
 	var errSave2Local error
 	save2LocalSubCount := 0
+	requestedEpisodeSaved := false
+	requestedEpisodeKey := pkg.GetEpisodeKeyName(job.Season, job.Episode)
 	// 只针对需要下载字幕的视频进行字幕的选择保存
 	subVideoCount := 0
 	for epsKey, episodeInfo := range seriesInfo.NeedDlEpsKeyList {
@@ -142,6 +148,9 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 				d.log.Errorln(errInterface.(error))
 			} else {
 				save2LocalSubCount++
+				if epsKey == requestedEpisodeKey {
+					requestedEpisodeSaved = true
+				}
 			}
 			break
 		case p := <-panicChan:
@@ -157,6 +166,19 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 		}
 
 		subVideoCount++
+	}
+	// A multi-episode archive is already persisted in FileDownloader's shared
+	// cache. Fan its extracted episode files out now so queued episodes do not
+	// fetch and unpack the same ASSRT collection one by one.
+	backfillReport, backfillErr := d.backfillSeriesCollection(ctx, job, organizeSubFiles)
+	if backfillErr != nil {
+		// Backfill is additive. The explicitly requested episode still decides the
+		// current job outcome, while partial fan-out remains safely reusable.
+		d.log.Warningln("seriesDlFunc.backfillSeriesCollection", backfillErr)
+	}
+	if backfillReport.Saved > 0 {
+		d.log.Infof("seriesDlFunc collection cache backfilled %d episodes and completed %d queued jobs",
+			backfillReport.Saved, backfillReport.QueueMarked)
 	}
 	// 这里会拿到一份季度字幕的列表比如，Key 是 S1E0 S2E0 S3E0，value 是新的存储位置
 	fullSeasonSubDict := d.saveFullSeasonSub(seriesInfo, organizeSubFiles)
@@ -199,6 +221,9 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 				d.log.Errorln(errInterface.(error))
 			} else {
 				save2LocalSubCount++
+				if episodeInfo.Season == job.Season && episodeInfo.Episode == job.Episode {
+					requestedEpisodeSaved = true
+				}
 			}
 
 			break
@@ -222,9 +247,10 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 		}
 	}
 
-	if save2LocalSubCount < 1 {
-		// 下载的字幕都没有一个能够写入到本地的，那么就有问题了
-		errSave2Local = seriesDownloadOutcomeError(save2LocalSubCount, errSave2Local)
+	if !requestedEpisodeSaved {
+		// A collection may save subtitles for sibling episodes. That must not mark
+		// the explicitly queued episode Done when its own subtitle is still absent.
+		errSave2Local = seriesRequestedEpisodeOutcome(false, errSave2Local)
 		d.downloadQueue.AutoDetectUpdateJobStatus(job, errSave2Local)
 		return errSave2Local
 	}

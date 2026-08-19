@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_candidate"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ifaces"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
@@ -66,6 +67,9 @@ func OneMovieDlSubInAllSite(logger *logrus.Logger, Suppliers []ifaces.ISupplier,
 		}()
 	}
 	supplierWorkers.Wait()
+	outSUbInfos = subtitle_candidate.Rank(outSUbInfos, subtitle_candidate.Target{
+		Titles: []string{strings.TrimSuffix(filepath.Base(oneVideoFullPath), filepath.Ext(oneVideoFullPath))},
+	})
 
 	for index, info := range outSUbInfos {
 		logger.Debugln(common.QueueName, i, "OneMovieDlSubInAllSite get sub", index, "Name:", info.Name, "FileUrl:", info.FileUrl)

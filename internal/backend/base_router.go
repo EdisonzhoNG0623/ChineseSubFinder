@@ -152,6 +152,7 @@ func InitRouter(
 		GroupAPIV1.POST("/add-job", cbV1.AddJobHandler)
 		GroupAPIV1.GET("/job-status", cbV1.GetJobStatusHandler)
 		GroupAPIV1.POST("/change-job-status", cbV1.ChangeJobStatusHandler)
+		GroupAPIV1.POST("/run-scan", cbV1.RunScanHandler)
 		GroupAPIV1.POST("/add-video-played-info", cbV1.AddVideoPlayedInfoHandler)
 		GroupAPIV1.DELETE("/del-video-played-info", cbV1.DelVideoPlayedInfoHandler)
 	}

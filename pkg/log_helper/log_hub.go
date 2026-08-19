@@ -180,23 +180,15 @@ func CleanAndLoadOnceLogs() {
 
 	pathRoot := filepath.Join(pkg.ConfigRootDirFPath(), "Logs")
 	// 扫描当前日志存储目录下有多少个符合要求的 Once- 日志
-	// 确保有且仅有最近的 20 次扫描日志记录存在即可
+	// 保留最近的有限任务日志，避免长期运行后 Logs 目录无限增长
 	matches, err := filepath.Glob(filepath.Join(pathRoot, common.OnceLogPrefix+"*.log"))
 	if err != nil {
 		panic(err)
 	}
 	if len(matches) > onceLogMaxCount {
-		// 需要清理多余的
-		// 保存的文件名是 Once-unixTime.log 做为前提
-		// 这里假定查询出来的都是正序排序
-		for i := 0; i <= len(matches)-1-onceLogMaxCount; i++ {
-
-			_, err := os.Stat(matches[i])
-			if err != nil {
-				continue
-			}
-			_ = os.Remove(matches[i])
-		}
+		// Job IDs are not chronological. Keep the newest logs by mtime rather
+		// than relying on filepath.Glob's lexicographic order.
+		trimOnceLogs(matches, onceLogMaxCount)
 		// 将有存在价值的“单次”日志缓存到内存中，供 Web API 查询
 		matches, err = filepath.Glob(filepath.Join(pathRoot, common.OnceLogPrefix+"*.log"))
 		if err != nil {
@@ -212,7 +204,7 @@ var (
 )
 
 const (
-	onceLogMaxCount = 10000
+	onceLogMaxCount = 500
 
 	OnceSubsScanStart = "OneTimeSubtitleScanStart"
 	OnceSubsScanEnd   = "OneTimeSubtitleScanEnd"

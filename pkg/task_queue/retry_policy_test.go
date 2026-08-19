@@ -34,6 +34,10 @@ func TestRetryDelayClasses(t *testing.T) {
 		want     time.Duration
 	}{
 		{name: "no subtitle first", error: "No Sub Found", attempts: 1, want: 12 * time.Hour},
+		{name: "no subtitle second", error: "No Sub Found", attempts: 2, want: 2 * 24 * time.Hour},
+		{name: "no subtitle third", error: "No Sub Found", attempts: 3, want: 7 * 24 * time.Hour},
+		{name: "all suppliers empty", error: "all site download sub not found", attempts: 4, want: 14 * 24 * time.Hour},
+		{name: "empty supplier result", error: "No Sub Downloaded.", attempts: 2, want: 2 * 24 * time.Hour},
 		{name: "no subtitle capped", error: "No Sub Found", attempts: 100, want: 14 * 24 * time.Hour},
 		{name: "transient first", error: "context deadline exceeded", attempts: 1, want: 30 * time.Minute},
 		{name: "transient capped", error: "connection reset by peer", attempts: 100, want: 6 * time.Hour},
@@ -65,6 +69,19 @@ func TestNextAttemptAtHonorsForceRunAndPersistedSchedule(t *testing.T) {
 	job.ForceRun = true
 	if got := nextAttemptAt(job); !got.IsZero() {
 		t.Fatalf("forced job should be ready immediately, got %v", got)
+	}
+}
+
+func TestNextAttemptAtAppliesNewNoSubMinimumToOldSchedule(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	job := taskQueue2.OneJob{
+		DownloadTimes:   4,
+		ErrorInfo:       "all site download sub not found",
+		UpdateTime:      emby.Time(now),
+		NextAttemptTime: emby.Time(now.Add(8 * time.Hour)),
+	}
+	if got := nextAttemptAt(job); !got.Equal(now.Add(14 * 24 * time.Hour)) {
+		t.Fatalf("nextAttemptAt() = %v, want current no-sub minimum", got)
 	}
 }
 
@@ -227,6 +244,37 @@ func TestExpiredWaitingJobBecomesTerminalBeforeSelection(t *testing.T) {
 	}
 	if found, _, err := queue.GetOneWaitingJob(); err != nil || found {
 		t.Fatalf("expired waiting job remained selectable: found=%v err=%v", found, err)
+	}
+}
+
+func TestForcedExpiredWaitingJobBypassesRetryLifetime(t *testing.T) {
+	const queueName = "task_queue_forced_expired_waiting_test"
+	cache_center.DelDb(queueName)
+	t.Cleanup(func() { cache_center.DelDb(queueName) })
+
+	queue := NewTaskQueue(cache_center.NewCacheCenter(queueName, log_helper.GetLogger4Tester()))
+	t.Cleanup(queue.Close)
+	now := time.Now()
+	expirationDays := settings.Get().AdvancedSettings.TaskQueue.ExpirationTime
+	forced := taskQueue2.OneJob{
+		Id: "forced-expired", VideoFPath: "/forced-expired.mkv",
+		JobStatus: taskQueue2.Waiting, TaskPriority: FirstRetryTaskPriorityLevel,
+		DownloadTimes: 76, RetryTimes: 1, ErrorInfo: ErrNoSubFound.Error(), ForceRun: true,
+		AddedTime:  emby.Time(now.AddDate(0, 0, -expirationDays-1)),
+		UpdateTime: emby.Time(now),
+	}
+	if ok, err := queue.Add(forced); err != nil || !ok {
+		t.Fatalf("Add(forced expired) = %v, %v", ok, err)
+	}
+
+	queue.BeforeGetOneJob()
+	_, current := queue.GetOneJobByID(forced.Id)
+	if current.JobStatus != taskQueue2.Waiting || !current.ForceRun {
+		t.Fatalf("forced expired job was terminalized: %+v", current)
+	}
+	found, selected, err := queue.GetOneWaitingJob()
+	if err != nil || !found || selected.Id != forced.Id {
+		t.Fatalf("forced expired job not selected: found=%v job=%+v err=%v", found, selected, err)
 	}
 }
 

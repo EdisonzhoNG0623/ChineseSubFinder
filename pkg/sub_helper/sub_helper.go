@@ -17,6 +17,7 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/archive_helper"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/episode_identity"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/filter"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/language"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/regex_things"
@@ -90,8 +91,8 @@ func OrganizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []sup
 				if isMovie == false {
 					// 连续剧的情况
 					// 从解压的文件名称推断 Season 和 Episode 信息
-					_, nowSeason, nowEps, err := decode.GetSeasonAndEpisodeFromSubFileName(filepath.Base(fileFullPath))
-					if err != nil {
+					nowSeason, nowEps, matched := resolveOrganizedSubtitleEpisode(filepath.Base(fileFullPath), subInfos[i])
+					if !matched {
 						continue
 					}
 					newSubName := AddFrontName(subInfos[i], filepath.Base(fileFullPath))
@@ -129,6 +130,18 @@ func OrganizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []sup
 	}
 
 	return siteSubInfoDict, nil
+}
+
+func resolveOrganizedSubtitleEpisode(fileName string, source supplier.SubInfo) (int, int, bool) {
+	if source.Season > 0 && source.Episode > 0 && source.AbsoluteEpisode > 0 &&
+		episode_identity.FilenameContainsAbsoluteEpisode(fileName, source.AbsoluteEpisode) {
+		return source.Season, source.Episode, true
+	}
+	_, season, episode, err := decode.GetSeasonAndEpisodeFromSubFileName(fileName)
+	if err != nil || season <= 0 || episode <= 0 {
+		return 0, 0, false
+	}
+	return season, episode, true
 }
 
 // ChangeVideoExt2SubExt 检测 Name，如果是视频的后缀名就改为字幕的后缀名
@@ -224,12 +237,19 @@ func GetFrontNameAndOrgName(log *logrus.Logger, info *supplier.SubInfo) string {
 	}
 	info.Name = infoName
 
-	return "[" + info.FromWhere + "]_" + strconv.FormatInt(info.TopN, 10) + "_" + infoName
+	return "[" + info.FromWhere + "]_" + strconv.FormatInt(selectionRank(*info), 10) + "_" + infoName
 }
 
 // AddFrontName 添加文件的前缀
 func AddFrontName(info supplier.SubInfo, orgName string) string {
-	return "[" + info.FromWhere + "]_" + strconv.FormatInt(info.TopN, 10) + "_" + orgName
+	return "[" + info.FromWhere + "]_" + strconv.FormatInt(selectionRank(info), 10) + "_" + orgName
+}
+
+func selectionRank(info supplier.SubInfo) int64 {
+	if info.MatchRank > 0 {
+		return int64(info.MatchRank)
+	}
+	return info.TopN
 }
 
 // SearchMatchedSubFileByDir 搜索符合后缀名的视频文件，排除 Sub_SxE0 这样的文件夹中的文件
@@ -397,13 +417,13 @@ func DeleteOneSeasonSubCacheFolder(seriesDir string) error {
 }
 
 /*
-	只针对英文字幕进行合并分散的 DialoguesFilter
-	会遇到这样的字幕，如下0
-	2line-The Card Counter (2021) WEBDL-1080p.chinese(inside).ass
-	它的对白一句话分了两个 dialogue 去做。这样做后续字幕时间轴校正就会遇到问题，因为只有一半，匹配占比会很低
-	(每一个 Dialogue 的首字母需要分析，大写和小写的占比是多少，统计一下，正常的，和上述特殊的)
-	那么，就需要额外的逻辑去对 DialoguesFilterEx 进行额外的推断
-	暂时考虑的方案是，英文对白每一句的开头应该是英文大写字幕，如果是小写字幕，就应该与上语句合并，且每一句的字符长度有大于一定才触发
+只针对英文字幕进行合并分散的 DialoguesFilter
+会遇到这样的字幕，如下0
+2line-The Card Counter (2021) WEBDL-1080p.chinese(inside).ass
+它的对白一句话分了两个 dialogue 去做。这样做后续字幕时间轴校正就会遇到问题，因为只有一半，匹配占比会很低
+(每一个 Dialogue 的首字母需要分析，大写和小写的占比是多少，统计一下，正常的，和上述特殊的)
+那么，就需要额外的逻辑去对 DialoguesFilterEx 进行额外的推断
+暂时考虑的方案是，英文对白每一句的开头应该是英文大写字幕，如果是小写字幕，就应该与上语句合并，且每一句的字符长度有大于一定才触发
 */
 func MergeMultiDialogue4EngSubtitle(inSubParser *subparser.FileInfo) {
 	merger := NewDialogueMerger()
@@ -420,11 +440,11 @@ func GetVADInfoFeatureFromSub(fileInfo *subparser.FileInfo, frontAndEndPer float
 }
 
 /*
-	GetVADInfoFeatureFromSubNeedOffsetTimeWillInsert 只不过这里可以加一个每一句话固定的偏移时间
-	这里的字幕要求是完整的一个字幕
-	1. 抽取字幕的时间片段的时候，暂定，前 15% 和后 15% 要避开，前奏、主题曲、结尾曲
-	2. 将整个字幕，抽取连续 5 句对话为一个单元，提取时间片段信息
-	3. 这里抽取的是特征，也就有额外的逻辑去找这个特征（本程序内会描述为“钥匙”）
+GetVADInfoFeatureFromSubNeedOffsetTimeWillInsert 只不过这里可以加一个每一句话固定的偏移时间
+这里的字幕要求是完整的一个字幕
+1. 抽取字幕的时间片段的时候，暂定，前 15% 和后 15% 要避开，前奏、主题曲、结尾曲
+2. 将整个字幕，抽取连续 5 句对话为一个单元，提取时间片段信息
+3. 这里抽取的是特征，也就有额外的逻辑去找这个特征（本程序内会描述为“钥匙”）
 */
 func GetVADInfoFeatureFromSubNeedOffsetTimeWillInsert(fileInfo *subparser.FileInfo, SkipFrontAndEndPer float64, subUnitMaxCount int, offsetTime float64, insert bool) ([]SubUnit, error) {
 	if subUnitMaxCount < 0 {
@@ -512,7 +532,7 @@ func GetVADInfoFeatureFromSubNeedOffsetTimeWillInsert(fileInfo *subparser.FileIn
 }
 
 /*
-	GetVADInfoFeatureFromSubNew 将 Sub 文件转换为 VAD List 信息
+GetVADInfoFeatureFromSubNew 将 Sub 文件转换为 VAD List 信息
 */
 func GetVADInfoFeatureFromSubNew(fileInfo *subparser.FileInfo, SkipFrontAndEndPer float64) (*SubUnit, error) {
 

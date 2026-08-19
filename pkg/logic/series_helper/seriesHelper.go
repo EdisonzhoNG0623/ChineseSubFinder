@@ -9,6 +9,7 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/search"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_candidate"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
@@ -187,6 +188,9 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 	}()
 	logger.Infoln(common.QueueName, i, "DlSub Start", seriesInfo.DirPath)
 	logger.Infoln(common.QueueName, i, "IMDB ID:", seriesInfo.ImdbId, "NeedDownloadSubs:", len(seriesInfo.NeedDlEpsKeyList))
+	if err := enrichSeriesEpisodeNumbering(logger, seriesInfo); err != nil {
+		logger.Debugln("anime absolute numbering unavailable:", err)
+	}
 	var outSUbInfos = make([]supplier.SubInfo, 0)
 	var outMu sync.Mutex
 	var supplierWorkers sync.WaitGroup
@@ -238,6 +242,14 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 		go oneSupplierFunc()
 	}
 	supplierWorkers.Wait()
+
+	target := subtitle_candidate.Target{Titles: []string{seriesInfo.Name}}
+	for _, episode := range seriesInfo.NeedDlEpsKeyList {
+		target.Episodes = append(target.Episodes, subtitle_candidate.EpisodeTarget{
+			Season: episode.Season, Episode: episode.Episode, AbsoluteEpisode: episode.AbsoluteEpisode,
+		})
+	}
+	outSUbInfos = subtitle_candidate.Rank(outSUbInfos, target)
 
 	return outSUbInfos
 }
@@ -346,6 +358,8 @@ func GetSeriesInfoFromDir(dealers *media_info_dealers.Dealers, seriesDir string)
 	if err != nil {
 		return nil, err
 	}
+	seriesInfo.TmdbId = videoInfo.TmdbId
+	seriesInfo.TvdbId = videoInfo.TVdbId
 
 	imdbInfo, err := imdb_helper.GetIMDBInfoFromVideoNfoInfo(dealers, videoInfo)
 	if err != nil {
@@ -364,6 +378,9 @@ func GetSeriesInfoFromDir(dealers *media_info_dealers.Dealers, seriesDir string)
 			seriesInfo.Name = filepath.Base(seriesDir)
 		}
 		seriesInfo.ImdbId = imdbInfo.IMDBID
+		if imdbInfo.TmdbId != "" {
+			seriesInfo.TmdbId = imdbInfo.TmdbId
+		}
 		seriesInfo.Year = imdbInfo.Year
 	} else {
 		if videoInfo.Title != "" {

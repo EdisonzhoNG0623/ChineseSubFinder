@@ -68,6 +68,35 @@
           </q-item-section>
         </q-item>
       </template>
+
+      <template v-if="form.subdl_settings">
+        <q-item tag="label">
+          <q-item-section>
+            <q-item-label>SubDL（https://subdl.com/api-doc）</q-item-label>
+            <q-item-label caption>
+              使用IMDb/TMDB精确匹配，支持中文单集字幕和完整季字幕包。需要有效的SubDL API订阅；配置后请重启程序或容器。
+            </q-item-label>
+          </q-item-section>
+          <q-item-section avatar top>
+            <q-toggle v-model="form.subdl_settings.enabled" />
+          </q-item-section>
+        </q-item>
+
+        <q-item class="q-mt-sm">
+          <q-item-section>
+            <q-input
+              :disable="!form.subdl_settings.enabled"
+              v-model="form.subdl_settings.api_key"
+              type="password"
+              placeholder="填写你的API Key"
+              label="SubDL API Key"
+              standout
+              dense
+              :rules="[(val) => !!val || '不能为空']"
+            />
+          </q-item-section>
+        </q-item>
+      </template>
     </q-list>
   </div>
 </template>

@@ -22,6 +22,7 @@ const (
 	SubSiteAssrt            = "assrt"
 	SubSiteA4K              = "a4k"
 	SubSiteSubtitleBest     = "subtitle_best"
+	SubSiteSubDL            = "subdl"
 )
 
 const (

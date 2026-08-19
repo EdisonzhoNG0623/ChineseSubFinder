@@ -54,3 +54,27 @@ func TestFullSeasonEpisodeSubs(t *testing.T) {
 		})
 	}
 }
+
+func TestSeriesRequestedEpisodeOutcome(t *testing.T) {
+	saveErr := errors.New("save failed")
+	tests := []struct {
+		name                  string
+		requestedEpisodeSaved bool
+		saveErr               error
+		wantError             error
+	}{
+		{name: "requested episode saved", requestedEpisodeSaved: true},
+		{name: "only sibling episode saved", wantError: task_queue.ErrNoSubFound},
+		{name: "requested episode save failed", saveErr: saveErr, wantError: saveErr},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := seriesRequestedEpisodeOutcome(test.requestedEpisodeSaved, test.saveErr)
+			if !errors.Is(got, test.wantError) {
+				t.Fatalf("seriesRequestedEpisodeOutcome(%t, %v) = %v, want %v",
+					test.requestedEpisodeSaved, test.saveErr, got, test.wantError)
+			}
+		})
+	}
+}

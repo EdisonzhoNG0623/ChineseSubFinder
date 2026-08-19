@@ -8,9 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/episode_identity"
 
 	common2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
@@ -29,6 +33,9 @@ import (
 
 const (
 	assrtDownloadTimeout = 6 * time.Minute
+	assrtSearchTimeout   = 15 * time.Second
+	assrtDetailTimeout   = 20 * time.Second
+	assrtQuotaTimeout    = 10 * time.Second
 	assrtMaxDownloadSize = 3 * 1024 * 1024
 )
 
@@ -37,6 +44,7 @@ type Supplier struct {
 	fileDownloader    *file_downloader.FileDownloader
 	isAlive           bool
 	theSearchInterval time.Duration
+	requestLock       sync.Mutex
 }
 
 func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
@@ -45,10 +53,6 @@ func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
 	sup.log = fileDownloader.Log
 	sup.fileDownloader = fileDownloader
 	sup.isAlive = true // 默认是可以使用的，如果 check 后，再调整状态
-
-	if settings.Get().AdvancedSettings.Topic != common2.DownloadSubsPerSite {
-		settings.Get().AdvancedSettings.Topic = common2.DownloadSubsPerSite
-	}
 
 	sup.theSearchInterval = 20 * time.Second
 
@@ -101,6 +105,8 @@ func (s *Supplier) GetSupplierName() string {
 }
 
 func (s *Supplier) GetSubListFromFile4Movie(filePath string) ([]supplier.SubInfo, error) {
+	s.requestLock.Lock()
+	defer s.requestLock.Unlock()
 
 	outSubInfos := make([]supplier.SubInfo, 0)
 	if settings.Get().SubtitleSources.AssrtSettings.Enabled == false {
@@ -115,6 +121,8 @@ func (s *Supplier) GetSubListFromFile4Movie(filePath string) ([]supplier.SubInfo
 }
 
 func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	s.requestLock.Lock()
+	defer s.requestLock.Unlock()
 
 	outSubInfos := make([]supplier.SubInfo, 0)
 	if settings.Get().SubtitleSources.AssrtSettings.Enabled == false {
@@ -129,6 +137,8 @@ func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]s
 }
 
 func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	s.requestLock.Lock()
+	defer s.requestLock.Unlock()
 
 	outSubInfos := make([]supplier.SubInfo, 0)
 	if settings.Get().SubtitleSources.AssrtSettings.Enabled == false {
@@ -142,7 +152,7 @@ func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]su
 	return s.downloadSub4Series(seriesInfo)
 }
 
-func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool) ([]supplier.SubInfo, error) {
+func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool, episodeMetadata ...series.EpisodeInfo) ([]supplier.SubInfo, error) {
 
 	defer func() {
 		s.log.Debugln(s.GetSupplierName(), videoFPath, "End...")
@@ -156,36 +166,61 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool) ([]suppli
 		s.log.Errorln(s.GetSupplierName(), videoFPath, "GetMixMediaInfo", err)
 		return nil, err
 	}
-	// 需要找到中文名称去搜索，找不到就是用英文名称，还找不到就是 OriginalTitle
-	found, searchSubResult, err := s.getSubInfoEx(mediaInfo, videoFPath, isMovie, "cn")
-	if err != nil {
-		s.log.Errorln(s.GetSupplierName(), videoFPath, "GetSubInfoEx", err)
-		return nil, err
+	var searchSubResult *SearchSubResult
+	found := false
+	targetEpisodes := make([]int, 0, 2)
+	targetSeason := 0
+	targetEpisode := 0
+	absoluteEpisode := 0
+	if !isMovie {
+		if len(episodeMetadata) > 0 {
+			targetSeason = episodeMetadata[0].Season
+			targetEpisode = episodeMetadata[0].Episode
+			absoluteEpisode = episodeMetadata[0].AbsoluteEpisode
+		} else if parsed, parseErr := decode.GetVideoInfoFromFileName(filepath.Base(videoFPath)); parseErr == nil {
+			targetSeason = parsed.Season
+			targetEpisode = parsed.Episode
+		}
+		targetEpisodes = append(targetEpisodes, targetEpisode)
+		if absoluteEpisode > 0 && absoluteEpisode != targetEpisode {
+			targetEpisodes = append(targetEpisodes, absoluteEpisode)
+		}
+		for _, query := range assrtProviderSearchPlan(mediaInfo, targetSeason, targetEpisode, absoluteEpisode) {
+			searchSubResult, err = s.getSubByKeyWord(query.Query)
+			if err != nil {
+				return nil, err
+			}
+			if assrtSearchResultHasMatchingCandidate(mediaInfo, targetEpisodes, searchSubResult) {
+				found = true
+				break
+			}
+		}
+	} else {
+		// Search aliases from most locally useful to most portable. Candidate
+		// identity validation below makes these fallbacks safe.
+		for _, keyWordType := range assrtSearchKeywordTypes(mediaInfo) {
+			found, searchSubResult, err = s.getSubInfoEx(mediaInfo, videoFPath, true, keyWordType)
+			if err != nil {
+				s.log.Errorln(s.GetSupplierName(), videoFPath, "GetSubInfoEx", keyWordType, err)
+				return nil, err
+			}
+			if found {
+				break
+			}
+		}
 	}
-	if found == false {
-		// 启用严格模式，中文找不到就停止
+	if !found {
 		return nil, nil
-		//// 没有找到中文名称，就用英文名称去搜索
-		//found, searchSubResult, err = s.getSubInfoEx(mediaInfo, videoFPath, isMovie, "en")
-		//if err != nil {
-		//	s.log.Errorln(s.GetSupplierName(), videoFPath, "GetSubInfoEx", err)
-		//	return nil, err
-		//}
-		//if found == false {
-		//	// 没有找到英文名称，就用原名称去搜索
-		//	found, searchSubResult, err = s.getSubInfoEx(mediaInfo, videoFPath, isMovie, "org")
-		//	if err != nil {
-		//		s.log.Errorln(s.GetSupplierName(), videoFPath, "GetSubInfoEx", err)
-		//		return nil, err
-		//	}
-		//	if found == false {
-		//		return nil, nil
-		//	}
-		//}
 	}
 
 	videoFileName := filepath.Base(videoFPath)
 	for index, subInfo := range searchSubResult.Sub.Subs {
+		candidateMatches, rejectedField := assrtCandidateFieldsMatchMediaForEpisodes(mediaInfo, targetEpisodes, subInfo.NativeName, subInfo.Videoname)
+		if !candidateMatches {
+			s.log.Warningf("assrt skip title mismatch: id=%d target_cn=%q target_en=%q candidate=%q",
+				subInfo.Id, mediaInfo.TitleCn, mediaInfo.TitleEn, rejectedField)
+			continue
+		}
 
 		// 获取具体的下载地址
 		oneSubDetail, err := s.getSubDetail(subInfo.Id)
@@ -198,6 +233,13 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool) ([]suppli
 			continue
 		}
 		downloadDetail := oneSubDetail.Sub.Subs[0]
+		detailMatches, rejectedField := assrtCandidateFieldsMatchMediaForEpisodes(mediaInfo, targetEpisodes, downloadDetail.NativeName,
+			downloadDetail.Videoname, downloadDetail.Title, downloadDetail.Filename)
+		if !detailMatches {
+			s.log.Warningf("assrt skip detail title mismatch: id=%d target_cn=%q target_en=%q candidate=%q",
+				subInfo.Id, mediaInfo.TitleCn, mediaInfo.TitleEn, rejectedField)
+			continue
+		}
 		if downloadDetail.Size > assrtMaxDownloadSize {
 			s.log.Warningf("assrt skip oversized subtitle bundle: id=%d size=%d limit=%d", subInfo.Id, downloadDetail.Size, assrtMaxDownloadSize)
 			continue
@@ -217,6 +259,7 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool) ([]suppli
 		}
 
 		outSubInfoList = append(outSubInfoList, *subInfo)
+		outSubInfoList[len(outSubInfoList)-1].AbsoluteEpisode = absoluteEpisode
 		// 如果够了那么多个字幕就返回
 		if len(outSubInfoList) >= settings.Get().AdvancedSettings.Topic {
 			return outSubInfoList, nil
@@ -224,6 +267,82 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool) ([]suppli
 	}
 
 	return outSubInfoList, nil
+}
+
+const assrtMaxQueriesPerEpisode = 6
+
+func assrtProviderSearchPlan(mediaInfo *models.MediaInfo, season, episode, absoluteEpisode int) []episode_identity.QueryVariant {
+	aliases := []string{mediaInfo.TitleCn, mediaInfo.TitleEn, mediaInfo.OriginalTitle}
+	plan := episode_identity.BuildSearchPlan(aliases, episode_identity.Identity{
+		Season: season, Episode: episode, AbsoluteEpisode: absoluteEpisode,
+	})
+	if absoluteEpisode <= 0 {
+		if len(plan) > assrtMaxQueriesPerEpisode {
+			return plan[:assrtMaxQueriesPerEpisode]
+		}
+		return plan
+	}
+
+	// ASSRT rate-limits requests. Preserve all precise aired queries, then try
+	// bare absolute-number queries (the most common anime-site form), followed
+	// by E/EP forms only while the bounded budget remains.
+	prioritized := make([]episode_identity.QueryVariant, 0, assrtMaxQueriesPerEpisode)
+	bareSuffix := fmt.Sprintf(" %d", absoluteEpisode)
+	for _, query := range plan {
+		if query.Kind != episode_identity.QueryAbsolute {
+			prioritized = append(prioritized, query)
+		}
+	}
+	for _, query := range plan {
+		if query.Kind == episode_identity.QueryAbsolute && strings.HasSuffix(query.Query, bareSuffix) {
+			prioritized = append(prioritized, query)
+		}
+	}
+	for _, query := range plan {
+		if query.Kind == episode_identity.QueryAbsolute && !strings.HasSuffix(query.Query, bareSuffix) {
+			prioritized = append(prioritized, query)
+		}
+	}
+	if len(prioritized) > assrtMaxQueriesPerEpisode {
+		prioritized = prioritized[:assrtMaxQueriesPerEpisode]
+	}
+	return prioritized
+}
+
+func assrtSearchResultHasMatchingCandidate(mediaInfo *models.MediaInfo, targetEpisodes []int, result *SearchSubResult) bool {
+	if result == nil {
+		return false
+	}
+	for _, candidate := range result.Sub.Subs {
+		if matched, _ := assrtCandidateFieldsMatchMediaForEpisodes(mediaInfo, targetEpisodes, candidate.NativeName, candidate.Videoname); matched {
+			return true
+		}
+	}
+	return false
+}
+
+func assrtSearchKeywordTypes(mediaInfo *models.MediaInfo) []string {
+	types := make([]string, 0, 3)
+	seen := make(map[string]struct{}, 3)
+	for _, candidate := range []struct {
+		kind  string
+		title string
+	}{
+		{kind: "cn", title: mediaInfo.TitleCn},
+		{kind: "en", title: mediaInfo.TitleEn},
+		{kind: "org", title: mediaInfo.OriginalTitle},
+	} {
+		normalized := strings.ToLower(strings.TrimSpace(candidate.title))
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		types = append(types, candidate.kind)
+	}
+	return types
 }
 
 func (s *Supplier) getSubInfoEx(mediaInfo *models.MediaInfo, videoFPath string, isMovie bool, keyWordType string) (bool, *SearchSubResult, error) {
@@ -258,7 +377,7 @@ func (s *Supplier) downloadSub4Series(seriesInfo *series.SeriesInfo) ([]supplier
 	for _, episodeInfo := range seriesInfo.NeedDlEpsKeyList {
 
 		index++
-		one, err := s.getSubListFromFile(episodeInfo.FileFullPath, false)
+		one, err := s.getSubListFromFile(episodeInfo.FileFullPath, false, episodeInfo)
 		if err != nil {
 			s.log.Errorln(s.GetSupplierName(), "getSubListFromFile", episodeInfo.FileFullPath, err)
 			continue
@@ -294,6 +413,8 @@ func (s *Supplier) getSubByKeyWord(keyword string) (*SearchSubResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	httpClient.SetTimeout(assrtSearchTimeout)
+	httpClient.SetRetryCount(0)
 	resp, err := httpClient.R().
 		Get(settings.Get().AdvancedSettings.SuppliersSettings.Assrt.RootUrl +
 			"/sub/search?q=" + tt +
@@ -348,6 +469,8 @@ func (s *Supplier) getSubDetail(subID int) (OneSubDetail, error) {
 	if err != nil {
 		return subDetail, err
 	}
+	httpClient.SetTimeout(assrtDetailTimeout)
+	httpClient.SetRetryCount(0)
 	resp, err := httpClient.R().
 		SetQueryParams(map[string]string{
 			"token": settings.Get().SubtitleSources.AssrtSettings.Token,
@@ -387,6 +510,8 @@ func (s *Supplier) getUserInfo() (UserInfo, error) {
 	if err != nil {
 		return userInfo, err
 	}
+	httpClient.SetTimeout(assrtQuotaTimeout)
+	httpClient.SetRetryCount(0)
 	resp, err := httpClient.R().
 		SetQueryParams(map[string]string{
 			"token": settings.Get().SubtitleSources.AssrtSettings.Token,

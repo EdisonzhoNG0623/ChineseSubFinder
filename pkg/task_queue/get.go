@@ -35,7 +35,8 @@ func (t *TaskQueue) BeforeGetOneJob() {
 			// A waiting task outside its retry lifetime must become terminal before
 			// supplier calls. Previously it was downloaded once more and only then
 			// marked failed, which made a large legacy queue look like a hot loop.
-			if oneJob.JobStatus == task_queue2.Waiting && retryLifetimeExpired(oneJob, now, expirationDays) {
+			if oneJob.JobStatus == task_queue2.Waiting && !oneJob.ForceRun &&
+				retryLifetimeExpired(oneJob, now, expirationDays) {
 				oneJob.JobStatus = task_queue2.Failed
 				clearRetrySchedule(&oneJob)
 				oneJob.UpdateTime = emby.Time(now)
@@ -70,12 +71,19 @@ func (t *TaskQueue) BeforeGetOneJob() {
 
 // GetOneJob 优先获取 GetOneWaitingJob 然后才是 GetOneDoneJob
 func (t *TaskQueue) GetOneJob() (bool, task_queue2.OneJob, error) {
-	found, waitingJob, err := t.GetOneWaitingJob()
+	return t.GetOneJobExcludingSeries(nil)
+}
+
+// GetOneJobExcludingSeries selects the next eligible job while leaving active
+// series untouched. Collection fan-out can write multiple episodes, so two
+// workers must never process the same series concurrently.
+func (t *TaskQueue) GetOneJobExcludingSeries(excludedSeries map[string]struct{}) (bool, task_queue2.OneJob, error) {
+	found, waitingJob, err := t.getOneWaitingJob(excludedSeries)
 	if err != nil {
 		return false, task_queue2.OneJob{}, err
 	}
 	if found == false {
-		return t.GetOneDoneJob()
+		return t.getOneDoneJob(excludedSeries)
 	}
 
 	return true, waitingJob, nil
@@ -83,6 +91,10 @@ func (t *TaskQueue) GetOneJob() (bool, task_queue2.OneJob, error) {
 
 // GetOneWaitingJob 获取一个元素，按优先级，0 - taskPriorityCount 的级别去拿去任务，不会移除任务
 func (t *TaskQueue) GetOneWaitingJob() (bool, task_queue2.OneJob, error) {
+	return t.getOneWaitingJob(nil)
+}
+
+func (t *TaskQueue) getOneWaitingJob(excludedSeries map[string]struct{}) (bool, task_queue2.OneJob, error) {
 
 	defer t.queueLock.Unlock()
 	t.queueLock.Lock()
@@ -102,6 +114,9 @@ func (t *TaskQueue) GetOneWaitingJob() (bool, task_queue2.OneJob, error) {
 		t.taskPriorityMapList[taskPriority].Each(func(key interface{}, value interface{}) {
 			oneJob := value.(task_queue2.OneJob)
 			if oneJob.JobStatus != task_queue2.Waiting {
+				return
+			}
+			if _, excluded := excludedSeries[oneJob.SeriesRootDirPath]; excluded && oneJob.SeriesRootDirPath != "" {
 				return
 			}
 
@@ -134,6 +149,10 @@ func (t *TaskQueue) GetOneWaitingJob() (bool, task_queue2.OneJob, error) {
 
 // GetOneDoneJob 获取一个元素，按优先级，0 - taskPriorityCount 的级别去拿去任务，不会移除任务
 func (t *TaskQueue) GetOneDoneJob() (bool, task_queue2.OneJob, error) {
+	return t.getOneDoneJob(nil)
+}
+
+func (t *TaskQueue) getOneDoneJob(excludedSeries map[string]struct{}) (bool, task_queue2.OneJob, error) {
 
 	defer t.queueLock.Unlock()
 	t.queueLock.Lock()
@@ -151,6 +170,9 @@ func (t *TaskQueue) GetOneDoneJob() (bool, task_queue2.OneJob, error) {
 
 		t.taskPriorityMapList[taskPriority].Each(func(key interface{}, value interface{}) {
 			oneJob := value.(task_queue2.OneJob)
+			if _, excluded := excludedSeries[oneJob.SeriesRootDirPath]; excluded && oneJob.SeriesRootDirPath != "" {
+				return
+			}
 			if oneJob.JobStatus != task_queue2.Done ||
 				time.Time(oneJob.CreatedTime).AddDate(0, 0, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime).Before(now) ||
 				time.Time(oneJob.UpdateTime).Add(taskInterval).After(now) {

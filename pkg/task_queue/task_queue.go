@@ -357,26 +357,68 @@ func (t *TaskQueue) read() {
 			}
 			t.taskPriorityMapList[i].Put(key, nowOneJob)
 		})
-		// 需要把几个优先级的map中的key汇总
-		// JobID - OneJob
+	}
+
+	t.deduplicateLoadedJobs()
+	// Rebuild both indexes only after stale copies have been removed.
+	for i := 0; i <= taskPriorityCount; i++ {
 		t.taskPriorityMapList[i].Each(func(key interface{}, value interface{}) {
-			// JobID -- taskPriority
 			t.taskKeyMap.Put(key, i)
-			// SeriesRootDirPath -- tree.Set(JobID)
 			oneJob := value.(task_queue2.OneJob)
 			jobIDSet, found := t.taskGroupBySeries.Get(oneJob.SeriesRootDirPath)
-			if found == false {
-				// 不存在
-				nowJobIDSet := treeset.NewWithStringComparator()
-				nowJobIDSet.Add(oneJob.Id)
-				t.taskGroupBySeries.Put(oneJob.SeriesRootDirPath, nowJobIDSet)
-			} else {
-				// 存在
-				nowJobIDSet := jobIDSet.(*treeset.Set)
-				nowJobIDSet.Add(oneJob.Id)
-				t.taskGroupBySeries.Put(oneJob.SeriesRootDirPath, nowJobIDSet)
+			if !found {
+				jobIDSet = treeset.NewWithStringComparator()
+			}
+			jobIDSet.(*treeset.Set).Add(oneJob.Id)
+			t.taskGroupBySeries.Put(oneJob.SeriesRootDirPath, jobIDSet)
+		})
+	}
+}
+
+type loadedJobCandidate struct {
+	priority int
+	job      task_queue2.OneJob
+}
+
+// deduplicateLoadedJobs repairs legacy queue files that contain the same job
+// in multiple priority buckets. The newest copy wins; a priority-consistent
+// copy wins an exact timestamp tie. Stale files are persisted immediately so
+// the repair remains stable across restarts.
+func (t *TaskQueue) deduplicateLoadedJobs() {
+	canonical := make(map[string]loadedJobCandidate)
+	for priority := 0; priority <= taskPriorityCount; priority++ {
+		t.taskPriorityMapList[priority].Each(func(key interface{}, value interface{}) {
+			job := value.(task_queue2.OneJob)
+			current, found := canonical[job.Id]
+			if !found || time.Time(job.UpdateTime).After(time.Time(current.job.UpdateTime)) ||
+				(time.Time(job.UpdateTime).Equal(time.Time(current.job.UpdateTime)) &&
+					job.TaskPriority == priority && current.job.TaskPriority != current.priority) {
+				canonical[job.Id] = loadedJobCandidate{priority: priority, job: job}
 			}
 		})
+	}
+
+	changedPriorities := make(map[int]struct{})
+	removed := 0
+	for priority := 0; priority <= taskPriorityCount; priority++ {
+		keys := t.taskPriorityMapList[priority].Keys()
+		for _, key := range keys {
+			jobID := key.(string)
+			if canonical[jobID].priority == priority {
+				continue
+			}
+			t.taskPriorityMapList[priority].Remove(jobID)
+			changedPriorities[priority] = struct{}{}
+			removed++
+		}
+	}
+	for priority := range changedPriorities {
+		if err := t.save(priority); err != nil {
+			t.log.Errorln("TaskQueue startup dedup persist failed", priority, err)
+		}
+	}
+	if removed > 0 {
+		t.log.Infof("TaskQueue startup deduplicated %d stale priority copies", removed)
 	}
 }
 

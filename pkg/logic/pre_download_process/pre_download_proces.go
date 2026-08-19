@@ -16,6 +16,7 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/a4k"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/assrt"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/shooter"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subdl"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subhd"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/xunlei"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/zimuku"
@@ -109,8 +110,10 @@ func (p *PreDownloadProcess) Init() *PreDownloadProcess {
 		p.SubSupplierHub = subSupplier.NewSubSupplierHub(
 			xunlei.NewSupplier(p.fileDownloader),
 			shooter.NewSupplier(p.fileDownloader),
-			a4k.NewSupplier(p.fileDownloader),
 		)
+		if a4kSettings := settings.Get().AdvancedSettings.SuppliersSettings.A4k; a4kSettings != nil && a4kSettings.DailyDownloadLimit != 0 {
+			p.SubSupplierHub.AddSubSupplier(a4k.NewSupplier(p.fileDownloader))
+		}
 
 		if settings.Get().SubtitleSources.AssrtSettings.Enabled == true &&
 			settings.Get().SubtitleSources.AssrtSettings.Token != "" {
@@ -122,6 +125,11 @@ func (p *PreDownloadProcess) Init() *PreDownloadProcess {
 			settings.Get().SubtitleSources.SubtitleBestSettings.ApiKey != "" {
 			// 如果开启了 SubtitleBest 字幕源，则需要新增
 			p.SubSupplierHub.AddSubSupplier(subtitle_best.NewSupplier(p.fileDownloader))
+		}
+
+		if settings.Get().SubtitleSources.SubDLSettings.Enabled &&
+			settings.Get().SubtitleSources.SubDLSettings.ApiKey != "" {
+			p.SubSupplierHub.AddSubSupplier(subdl.NewSupplier(p.fileDownloader))
 		}
 
 		if pkg.LiteMode() == false {
