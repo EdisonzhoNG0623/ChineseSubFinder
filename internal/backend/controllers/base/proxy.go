@@ -45,6 +45,12 @@ func (cb *ControllerBase) CheckProxyHandler(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	resolvedProxyPassword, ok := resolveMaskedSecret(c,
+		checkProxy.ProxySettings.InputProxyPassword, settings.Get().AdvancedSettings.ProxySettings.InputProxyPassword)
+	if !ok {
+		return
+	}
+	checkProxy.ProxySettings.InputProxyPassword = resolvedProxyPassword
 	// 备份一份
 	bkProxySettings := settings.Get().AdvancedSettings.ProxySettings.CopyOne()
 	// 赋值 Web 传递过来的需要测试的代理参数

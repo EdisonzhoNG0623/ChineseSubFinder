@@ -103,6 +103,20 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 	organizeSubFiles, err = nowSubSupplierHub.DownloadSub4Series(job.SeriesRootDirPath,
 		seriesInfo,
 		downloadIndex)
+	// DownloadSub4Series enriches alternate anime numbering before suppliers
+	// run. Persist it after that enrichment so the queue API can explain the
+	// exact aired/scene/absolute fallback plan on later attempts.
+	if episode, found := seriesInfo.NeedDlEpsKeyList[pkg.GetEpisodeKeyName(job.Season, job.Episode)]; found {
+		job.AbsoluteEpisode = episode.AbsoluteEpisode
+		job.SceneSeason = episode.SceneSeason
+		job.SceneEpisode = episode.SceneEpisode
+		job.NumberingSource = episode.NumberingSource
+		job.NumberingConfidence = episode.NumberingConfidence
+		job.SeriesName = seriesInfo.Name
+		if _, updateErr := d.downloadQueue.Update(job); updateErr != nil {
+			d.log.Warningln("seriesDlFunc.UpdateEpisodeIdentity", updateErr)
+		}
+	}
 	if err != nil {
 		err = errors.New(fmt.Sprintf("seriesDlFunc.DownloadSub4Series %v S%vE%v %v", filepath.Base(job.SeriesRootDirPath), job.Season, job.Episode, err))
 		d.downloadQueue.AutoDetectUpdateJobStatus(job, err)

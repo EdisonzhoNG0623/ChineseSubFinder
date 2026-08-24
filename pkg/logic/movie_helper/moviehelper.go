@@ -1,6 +1,7 @@
 package movie_helper
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -8,8 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ai_ambiguity"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_candidate"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ifaces"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
@@ -56,7 +59,9 @@ func OneMovieDlSubInAllSite(logger *logrus.Logger, Suppliers []ifaces.ISupplier,
 				return
 			}
 
+			startedAt := time.Now()
 			subInfos, err := OneMovieDlSubInOneSite(logger, oneVideoFullPath, i, oneSupplier)
+			subtitle_metrics.RecordAttempt(oneSupplier.GetSupplierName(), time.Since(startedAt), len(subInfos), err)
 			if err != nil {
 				logger.Errorln(common.QueueName, i, oneSupplier.GetSupplierName(), "oneMovieDlSubInOneSite", err)
 				return
@@ -67,9 +72,14 @@ func OneMovieDlSubInAllSite(logger *logrus.Logger, Suppliers []ifaces.ISupplier,
 		}()
 	}
 	supplierWorkers.Wait()
-	outSUbInfos = subtitle_candidate.Rank(outSUbInfos, subtitle_candidate.Target{
+	target := subtitle_candidate.Target{
 		Titles: []string{strings.TrimSuffix(filepath.Base(oneVideoFullPath), filepath.Ext(oneVideoFullPath))},
-	})
+	}
+	var decisionErr error
+	outSUbInfos, _, decisionErr = subtitle_candidate.RankWithAmbiguityResolver(context.Background(), outSUbInfos, target, ai_ambiguity.ConfiguredResolver())
+	if decisionErr != nil {
+		logger.Warningln("AI ambiguity resolver abstained", decisionErr)
+	}
 
 	for index, info := range outSUbInfos {
 		logger.Debugln(common.QueueName, i, "OneMovieDlSubInAllSite get sub", index, "Name:", info.Name, "FileUrl:", info.FileUrl)

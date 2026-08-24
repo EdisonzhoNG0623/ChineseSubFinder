@@ -114,6 +114,12 @@ func InitRouter(
 		GroupV1.GET("/daemon/status", cbV1.DaemonStatusHandler)
 
 		GroupV1.GET("/jobs/list", cbV1.JobsListHandler)
+		GroupV1.GET("/jobs", cbV1.JobsPageHandler)
+		GroupV1.GET("/suppliers", cbV1.SupplierDiagnosticsHandler)
+		GroupV1.POST("/suppliers/check", cbV1.SupplierCheckHandler)
+		GroupV1.GET("/overview", cbV1.OverviewHandler)
+		GroupV1.GET("/ai/status", cbV1.AIStatusHandler)
+		GroupV1.POST("/ai/test", cbV1.AITestHandler)
 		GroupV1.POST("/jobs/change-job-status", cbV1.ChangeJobStatusHandler)
 		GroupV1.POST("/jobs/log", cbV1.JobLogHandler)
 

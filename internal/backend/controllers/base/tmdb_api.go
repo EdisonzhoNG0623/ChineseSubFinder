@@ -23,6 +23,17 @@ func (cb *ControllerBase) CheckTmdbApiHandler(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	resolvedAPIKey, ok := resolveMaskedSecret(c, req.ApiKey, settings.Get().AdvancedSettings.TmdbApiSettings.ApiKey)
+	if !ok {
+		return
+	}
+	req.ApiKey = resolvedAPIKey
+	resolvedProxyPassword, ok := resolveMaskedSecret(c,
+		req.ProxySettings.InputProxyPassword, settings.Get().AdvancedSettings.ProxySettings.InputProxyPassword)
+	if !ok {
+		return
+	}
+	req.ProxySettings.InputProxyPassword = resolvedProxyPassword
 	if req.ApiKey == "" {
 		c.JSON(http.StatusOK, backend.ReplyCommon{Message: "false"})
 		return

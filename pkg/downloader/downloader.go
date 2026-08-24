@@ -73,7 +73,8 @@ type Downloader struct {
 	movieInfoMap  map[string]MovieInfo  // 给 Web 界面使用的，Key: VideoFPath
 	seasonInfoMap map[string]SeasonInfo // 给 Web 界面使用的,Key: RootDirPath
 
-	needSkipCloudTask bool // 是否跳过云端任务，比如当前的 App 版本低于服务器的要求（过低可能爬虫已经失效，意义不大）
+	needSkipCloudTask    bool // 是否跳过云端任务，比如当前的 App 版本低于服务器的要求（过低可能爬虫已经失效，意义不大）
+	supplierCheckRunning int32
 }
 
 func NewDownloader(inSubFormatter ifaces.ISubFormatter, fileDownloader *file_downloader.FileDownloader, downloadQueue *task_queue.TaskQueue) *Downloader {
@@ -139,8 +140,16 @@ func NewDownloader(inSubFormatter ifaces.ISubFormatter, fileDownloader *file_dow
 
 // SupplierCheck 检查字幕源是否有效，会影响后续的字幕源是否参与下载
 func (d *Downloader) SupplierCheck() {
+	if !atomic.CompareAndSwapInt32(&d.supplierCheckRunning, 0, 1) {
+		d.log.Debugln("Download.SupplierCheck() already running")
+		return
+	}
+	d.runSupplierCheck()
+}
 
+func (d *Downloader) runSupplierCheck() {
 	defer func() {
+		atomic.StoreInt32(&d.supplierCheckRunning, 0)
 		if p := recover(); p != nil {
 			d.log.Errorln("Downloader.SupplierCheck() panic")
 			pkg.PrintPanicStack(d.log)
@@ -209,6 +218,18 @@ func (d *Downloader) SupplierCheck() {
 	//		return
 	//	}
 	//}
+}
+
+func (d *Downloader) StartSupplierCheckAsync() bool {
+	if !atomic.CompareAndSwapInt32(&d.supplierCheckRunning, 0, 1) {
+		return false
+	}
+	go d.runSupplierCheck()
+	return true
+}
+
+func (d *Downloader) IsSupplierCheckRunning() bool {
+	return atomic.LoadInt32(&d.supplierCheckRunning) != 0
 }
 
 // QueueDownloader 从字幕队列中取一个视频的字幕下载任务出来，并且开始下载

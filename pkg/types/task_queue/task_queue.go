@@ -16,25 +16,31 @@ import (
 )
 
 type OneJob struct {
-	Id                       string           `json:"id"`                           // 任务的唯一 ID
-	VideoType                common.VideoType `json:"video_type"`                   // 视频的类型
-	VideoFPath               string           `json:"video_f_path"`                 // 视频的全路径
-	VideoName                string           `json:"video_name"`                   // 视频的名称
-	Feature                  string           `json:"feature"`                      // 视频的特征码，蓝光的时候可能是空
-	SeriesRootDirPath        string           `json:"series_root_dir_path"`         // 连续剧的目录
-	Season                   int              `json:"season"`                       // 如果对应的是电影则可能是 0，没有
-	Episode                  int              `json:"episode"`                      // 如果对应的是电影则可能是 0，没有
-	JobStatus                JobStatus        `json:"job_status"`                   // 任务的状态
-	TaskPriority             int              `json:"task_priority" default:"5"`    // 任务的优先级，0 - 10 个级别，0 是最高，10 是最低
-	RetryTimes               int              `json:"retry_times"`                  // 重试了多少次
-	CreatedTime              emby.Time        `json:"created_time"`                 // 视频的发布时间或者是文件的创建时间
-	AddedTime                emby.Time        `json:"added_time"`                   // 任务添加的时间
-	UpdateTime               emby.Time        `json:"update_time"`                  // 任务更新的时间
-	MediaServerInsideVideoID string           `json:"media_server_inside_video_id"` // 媒体服务器中，这个视频的 ID，如果是 Emby 就对应它内部这个视频的 ID，后续用于指定刷新视频信息
-	ErrorInfo                string           `json:"error_info"`                   // 这个任务的错误信息
-	DownloadTimes            int              `json:"download_times"`               // 下载的次数，用于统计下载过几次
-	NextAttemptTime          emby.Time        `json:"next_attempt_time,omitempty"`  // 自适应退避后的下次尝试时间
-	ForceRun                 bool             `json:"force_run,omitempty"`          // 用户手动插队；消费一次后自动清除
+	Id                       string           `json:"id"`                             // 任务的唯一 ID
+	VideoType                common.VideoType `json:"video_type"`                     // 视频的类型
+	VideoFPath               string           `json:"video_f_path"`                   // 视频的全路径
+	VideoName                string           `json:"video_name"`                     // 视频的名称
+	Feature                  string           `json:"feature"`                        // 视频的特征码，蓝光的时候可能是空
+	SeriesRootDirPath        string           `json:"series_root_dir_path"`           // 连续剧的目录
+	Season                   int              `json:"season"`                         // 如果对应的是电影则可能是 0，没有
+	Episode                  int              `json:"episode"`                        // 如果对应的是电影则可能是 0，没有
+	AbsoluteEpisode          int              `json:"absolute_episode,omitempty"`     // 动漫绝对集号
+	SceneSeason              int              `json:"scene_season,omitempty"`         // 场景命名季号
+	SceneEpisode             int              `json:"scene_episode,omitempty"`        // 场景命名集号
+	NumberingSource          string           `json:"numbering_source,omitempty"`     // 集号识别来源
+	NumberingConfidence      float64          `json:"numbering_confidence,omitempty"` // 集号识别置信度
+	SeriesName               string           `json:"series_name,omitempty"`          // 剧集名称，用于搜索计划诊断
+	JobStatus                JobStatus        `json:"job_status"`                     // 任务的状态
+	TaskPriority             int              `json:"task_priority" default:"5"`      // 任务的优先级，0 - 10 个级别，0 是最高，10 是最低
+	RetryTimes               int              `json:"retry_times"`                    // 重试了多少次
+	CreatedTime              emby.Time        `json:"created_time"`                   // 视频的发布时间或者是文件的创建时间
+	AddedTime                emby.Time        `json:"added_time"`                     // 任务添加的时间
+	UpdateTime               emby.Time        `json:"update_time"`                    // 任务更新的时间
+	MediaServerInsideVideoID string           `json:"media_server_inside_video_id"`   // 媒体服务器中，这个视频的 ID，如果是 Emby 就对应它内部这个视频的 ID，后续用于指定刷新视频信息
+	ErrorInfo                string           `json:"error_info"`                     // 这个任务的错误信息
+	DownloadTimes            int              `json:"download_times"`                 // 下载的次数，用于统计下载过几次
+	NextAttemptTime          emby.Time        `json:"next_attempt_time,omitempty"`    // 自适应退避后的下次尝试时间
+	ForceRun                 bool             `json:"force_run,omitempty"`            // 用户手动插队；消费一次后自动清除
 }
 
 // IsBDMVStreamFile reports whether path points to one physical segment inside

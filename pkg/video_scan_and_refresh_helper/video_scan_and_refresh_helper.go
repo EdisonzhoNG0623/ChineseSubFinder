@@ -1227,6 +1227,12 @@ func (v *VideoScanAndRefreshHelper) filterMovieAndSeriesNeedDownloadNormal(norma
 			)
 			oneJob.Season = episodeInfo.Season
 			oneJob.Episode = episodeInfo.Episode
+			oneJob.AbsoluteEpisode = episodeInfo.AbsoluteEpisode
+			oneJob.SceneSeason = episodeInfo.SceneSeason
+			oneJob.SceneEpisode = episodeInfo.SceneEpisode
+			oneJob.NumberingSource = episodeInfo.NumberingSource
+			oneJob.NumberingConfidence = episodeInfo.NumberingConfidence
+			oneJob.SeriesName = seriesInfo.Name
 			oneJob.SeriesRootDirPath = seriesInfo.DirPath
 
 			bok, err := v.downloadQueue.Add(*oneJob)

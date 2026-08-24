@@ -271,6 +271,13 @@ func (t *TaskQueue) AutoDetectUpdateJobStatus(oneJob task_queue2.OneJob, inErr e
 		t.log.Warningln("AutoDetectUpdateJobStatus ==", oneJob.VideoFPath, "Job.ID", oneJob.Id, "Not Found")
 		return
 	}
+	outcome := "SUCCESS"
+	if inErr != nil {
+		outcome = string(ClassifyErrorInfo(inErr.Error()))
+	}
+	if err := t.center.TaskOutcomeAdd(now.Format("2006-01-02"), oneJob.VideoType.String(), outcome); err != nil {
+		t.log.Warningln("TaskOutcomeAdd", err)
+	}
 }
 
 func (t *TaskQueue) del(jobId string) (bool, error) {

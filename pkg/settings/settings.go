@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -72,13 +73,31 @@ func Get(reloadSettings ...bool) *Settings {
 	return _settings
 }
 
+func GetIfInitialized() (*Settings, bool) {
+	_settingsLocker.Lock()
+	defer _settingsLocker.Unlock()
+	if _settings == nil {
+		return nil, false
+	}
+	return _settings, true
+}
+
 // SetFullNewSettings 从 Web 端传入新的 Settings 完整设置
 func SetFullNewSettings(inSettings *Settings) error {
 
 	_settingsLocker.Lock()
 	defer _settingsLocker.Unlock()
 
+	if inSettings == nil {
+		return errors.New("settings payload is required")
+	}
+	inSettings.normalize()
 	nowConfigFPath := _settings.configFPath
+	RestoreMaskedSecrets(inSettings, _settings)
+	inSettings.Check()
+	if err := inSettings.ExperimentalFunction.AISettings.Validate(); err != nil {
+		return err
+	}
 	_settings = inSettings
 	_settings.configFPath = nowConfigFPath
 
@@ -147,12 +166,86 @@ func (s *Settings) GetNoPasswordSettings() *Settings {
 	// 需要关闭本地代理的实例，否则无法进行 clone 操作
 	//_ = s.AdvancedSettings.ProxySettings.CloseLocalHttpProxyServer()
 	//nowSettings := clone.Clone(s).(*Settings)
-	nowSettings.UserInfo.Password = noPassword4Show
+	MaskSecrets(nowSettings)
 	return nowSettings
 }
 
+func MaskSecrets(s *Settings) {
+	if s == nil {
+		return
+	}
+	if s.UserInfo != nil && s.UserInfo.Password != "" {
+		s.UserInfo.Password = noPassword4Show
+	}
+	if s.EmbySettings != nil && s.EmbySettings.APIKey != "" {
+		s.EmbySettings.APIKey = noPassword4Show
+	}
+	if s.AdvancedSettings != nil {
+		if s.AdvancedSettings.ProxySettings != nil && s.AdvancedSettings.ProxySettings.InputProxyPassword != "" {
+			s.AdvancedSettings.ProxySettings.InputProxyPassword = noPassword4Show
+		}
+		if s.AdvancedSettings.TmdbApiSettings.ApiKey != "" {
+			s.AdvancedSettings.TmdbApiSettings.ApiKey = noPassword4Show
+		}
+	}
+	if s.SubtitleSources != nil {
+		if s.SubtitleSources.AssrtSettings.Token != "" {
+			s.SubtitleSources.AssrtSettings.Token = noPassword4Show
+		}
+		if s.SubtitleSources.SubtitleBestSettings.ApiKey != "" {
+			s.SubtitleSources.SubtitleBestSettings.ApiKey = noPassword4Show
+		}
+		if s.SubtitleSources.SubDLSettings.ApiKey != "" {
+			s.SubtitleSources.SubDLSettings.ApiKey = noPassword4Show
+		}
+	}
+	if s.ExperimentalFunction != nil {
+		if s.ExperimentalFunction.ApiKeySettings.Key != "" {
+			s.ExperimentalFunction.ApiKeySettings.Key = noPassword4Show
+		}
+		if s.ExperimentalFunction.AISettings.APIKey != "" {
+			s.ExperimentalFunction.AISettings.APIKey = noPassword4Show
+		}
+	}
+}
+
+func RestoreMaskedSecrets(incoming, current *Settings) {
+	if incoming == nil || current == nil {
+		return
+	}
+	restore := func(value *string, existing string) {
+		if value != nil && *value == noPassword4Show {
+			*value = existing
+		}
+	}
+	if incoming.UserInfo != nil && current.UserInfo != nil {
+		restore(&incoming.UserInfo.Password, current.UserInfo.Password)
+	}
+	if incoming.EmbySettings != nil && current.EmbySettings != nil {
+		restore(&incoming.EmbySettings.APIKey, current.EmbySettings.APIKey)
+	}
+	if incoming.AdvancedSettings != nil && current.AdvancedSettings != nil {
+		if incoming.AdvancedSettings.ProxySettings != nil && current.AdvancedSettings.ProxySettings != nil {
+			restore(&incoming.AdvancedSettings.ProxySettings.InputProxyPassword, current.AdvancedSettings.ProxySettings.InputProxyPassword)
+		}
+		restore(&incoming.AdvancedSettings.TmdbApiSettings.ApiKey, current.AdvancedSettings.TmdbApiSettings.ApiKey)
+	}
+	if incoming.SubtitleSources != nil && current.SubtitleSources != nil {
+		restore(&incoming.SubtitleSources.AssrtSettings.Token, current.SubtitleSources.AssrtSettings.Token)
+		restore(&incoming.SubtitleSources.SubtitleBestSettings.ApiKey, current.SubtitleSources.SubtitleBestSettings.ApiKey)
+		restore(&incoming.SubtitleSources.SubDLSettings.ApiKey, current.SubtitleSources.SubDLSettings.ApiKey)
+	}
+	if incoming.ExperimentalFunction != nil && current.ExperimentalFunction != nil {
+		restore(&incoming.ExperimentalFunction.ApiKeySettings.Key, current.ExperimentalFunction.ApiKeySettings.Key)
+		restore(&incoming.ExperimentalFunction.AISettings.APIKey, current.ExperimentalFunction.AISettings.APIKey)
+	}
+}
+
+func IsMaskedSecret(value string) bool { return value == noPassword4Show }
+
 // Check 检测，某些参数有范围限制
 func (s *Settings) Check() {
+	s.normalize()
 
 	// 每个网站最多找 Top 几的字幕结果，评价系统成熟后，才有设计的意义
 	if s.AdvancedSettings.Topic < 0 || s.AdvancedSettings.Topic > 3 {
@@ -170,7 +263,56 @@ func (s *Settings) Check() {
 	// 这里需要做一次 Default 的检查，因为有设置会被改写低于预期，至少要在 Default 之上
 	s.AdvancedSettings.TaskQueue.Check()
 	s.AdvancedSettings.DownloadFileCache.Check()
+	if s.ExperimentalFunction != nil {
+		s.ExperimentalFunction.AISettings.Check()
+	}
 
+}
+
+func (s *Settings) normalize() {
+	if s == nil {
+		return
+	}
+	defaults := NewSettings("")
+	if s.UserInfo == nil {
+		s.UserInfo = defaults.UserInfo
+	}
+	if s.CommonSettings == nil {
+		s.CommonSettings = defaults.CommonSettings
+	}
+	if s.SubtitleSources == nil {
+		s.SubtitleSources = defaults.SubtitleSources
+	}
+	if s.AdvancedSettings == nil {
+		s.AdvancedSettings = defaults.AdvancedSettings
+	}
+	if s.AdvancedSettings.ProxySettings == nil {
+		s.AdvancedSettings.ProxySettings = defaults.AdvancedSettings.ProxySettings
+	}
+	if s.AdvancedSettings.SuppliersSettings == nil {
+		s.AdvancedSettings.SuppliersSettings = defaults.AdvancedSettings.SuppliersSettings
+	}
+	if s.AdvancedSettings.ScanLogic == nil {
+		s.AdvancedSettings.ScanLogic = defaults.AdvancedSettings.ScanLogic
+	}
+	if s.AdvancedSettings.TaskQueue == nil {
+		s.AdvancedSettings.TaskQueue = defaults.AdvancedSettings.TaskQueue
+	}
+	if s.AdvancedSettings.DownloadFileCache == nil {
+		s.AdvancedSettings.DownloadFileCache = defaults.AdvancedSettings.DownloadFileCache
+	}
+	if s.EmbySettings == nil {
+		s.EmbySettings = defaults.EmbySettings
+	}
+	if s.DeveloperSettings == nil {
+		s.DeveloperSettings = defaults.DeveloperSettings
+	}
+	if s.TimelineFixerSettings == nil {
+		s.TimelineFixerSettings = defaults.TimelineFixerSettings
+	}
+	if s.ExperimentalFunction == nil {
+		s.ExperimentalFunction = defaults.ExperimentalFunction
+	}
 }
 
 // isDir 存在且是文件夹

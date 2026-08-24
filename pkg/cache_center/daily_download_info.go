@@ -6,6 +6,29 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/cache_center/models"
 )
 
+type DailySupplierCount struct {
+	SupplierName string `json:"supplier_name"`
+	Count        int    `json:"count"`
+}
+
+// DailyDownloadCountSummary aggregates all public-IP buckets without exposing
+// any recorded IP address to the diagnostics API.
+func (c *CacheCenter) DailyDownloadCountSummary(whichDay ...string) ([]DailySupplierCount, error) {
+	defer c.locker.Unlock()
+	c.locker.Lock()
+	day := time.Now().Format("2006-01-02")
+	if len(whichDay) > 0 && whichDay[0] != "" {
+		day = whichDay[0]
+	}
+	out := make([]DailySupplierCount, 0)
+	result := c.db.Model(&models.DailyDownloadInfo{}).
+		Select("supplier_name, SUM(count) AS count").
+		Where("which_day = ?", day).
+		Group("supplier_name").
+		Scan(&out)
+	return out, result.Error
+}
+
 // DailyDownloadCountGet 根据字幕提供者的名称，获取今日下载计数的次数，仅仅统计次数，并不确认是那个视频的字幕下载
 // whichDay nowTime.Format("2006-01-02")
 func (c *CacheCenter) DailyDownloadCountGet(supplierName string, publicIP string, whichDay ...string) (int, error) {

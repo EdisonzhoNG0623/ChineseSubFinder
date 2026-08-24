@@ -9,8 +9,9 @@ type ExperimentalFunction struct {
 	LocalChromeSettings  LocalChromeSettings  `json:"local_chrome_settings"`
 	ShareSubSettings     ShareSubSettings     `json:"share_sub_settings"`
 	ExtendLog            ExtendLog            `json:"extend_log"`
+	AISettings           AISettings           `json:"ai_settings"`
 }
 
 func NewExperimentalFunction() *ExperimentalFunction {
-	return &ExperimentalFunction{}
+	return &ExperimentalFunction{AISettings: NewAISettings()}
 }

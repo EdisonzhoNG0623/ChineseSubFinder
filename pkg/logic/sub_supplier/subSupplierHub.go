@@ -16,6 +16,7 @@ import (
 	seriesHelper "github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/series_helper"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_helper"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/errgo.v2/fmt/errors"
 )
@@ -205,10 +206,18 @@ func (d *SubSupplierHub) CheckSubSiteStatus() backend.ReplyCheckStatus {
 				skippedSuppliers[name] = struct{}{}
 				outStatus.SubSiteStatus = append(outStatus.SubSiteStatus, backend.SiteStatus{Name: name, Valid: false})
 				d.locker.Unlock()
+				subtitle_metrics.RecordHealth(name, "COOLDOWN", 0, time.Now(), nextProbe)
 				return
 			}
+			checkedAt := time.Now()
 			bAlive, speed := supplier.CheckAlive()
-			processSupplierHealthCooldown.record(name, bAlive, time.Now())
+			processSupplierHealthCooldown.record(name, bAlive, checkedAt)
+			_, nextProbe := processSupplierHealthCooldown.shouldProbe(name, checkedAt)
+			health := "UNHEALTHY"
+			if bAlive {
+				health = "HEALTHY"
+			}
+			subtitle_metrics.RecordHealth(name, health, speed, checkedAt, nextProbe)
 			if bAlive == false {
 				d.log.Warningln(name, "Check Alive = false")
 			} else {

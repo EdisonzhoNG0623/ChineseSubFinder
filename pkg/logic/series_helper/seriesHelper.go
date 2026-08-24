@@ -1,15 +1,18 @@
 package series_helper
 
 import (
+	"context"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ai_ambiguity"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/search"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_candidate"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
@@ -226,7 +229,9 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 			}
 
 			// 一次性把这一部连续剧的所有字幕下载完
+			startedAt := time.Now()
 			subInfos, err := oneSupplier.GetSubListFromFile4Series(seriesInfo)
+			subtitle_metrics.RecordAttempt(oneSupplier.GetSupplierName(), time.Since(startedAt), len(subInfos), err)
 			if err != nil {
 				logger.Errorln(common.QueueName, i, oneSupplier.GetSupplierName(), "GetSubListFromFile4Series", err)
 				return
@@ -249,7 +254,11 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 			Season: episode.Season, Episode: episode.Episode, AbsoluteEpisode: episode.AbsoluteEpisode,
 		})
 	}
-	outSUbInfos = subtitle_candidate.Rank(outSUbInfos, target)
+	var decisionErr error
+	outSUbInfos, _, decisionErr = subtitle_candidate.RankWithAmbiguityResolver(context.Background(), outSUbInfos, target, ai_ambiguity.ConfiguredResolver())
+	if decisionErr != nil {
+		logger.Warningln("AI ambiguity resolver abstained", decisionErr)
+	}
 
 	return outSUbInfos
 }

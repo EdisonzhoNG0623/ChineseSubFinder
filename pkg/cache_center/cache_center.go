@@ -46,7 +46,7 @@ func NewCacheCenter(cacheName string, Log *logrus.Logger) *CacheCenter {
 		panic(fmt.Sprintf("failed to connect database, %s", err.Error()))
 	}
 	// 迁移 schema
-	err = c.db.AutoMigrate(&models.DailyDownloadInfo{}, &models.TaskQueueInfo{}, &models.DownloadFileInfo{})
+	err = c.db.AutoMigrate(&models.DailyDownloadInfo{}, &models.TaskQueueInfo{}, &models.DownloadFileInfo{}, &models.TaskOutcomeDaily{})
 	if err != nil {
 		panic(fmt.Sprintf("db AutoMigrate error, %s", err.Error()))
 	}

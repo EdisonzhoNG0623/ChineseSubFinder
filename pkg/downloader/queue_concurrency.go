@@ -97,6 +97,12 @@ func (d *Downloader) activeSeriesSnapshot() map[string]struct{} {
 	return out
 }
 
+func (d *Downloader) ActiveQueueWorkers() int {
+	d.queueWorkerStateLock.Lock()
+	defer d.queueWorkerStateLock.Unlock()
+	return d.activeQueueWorkers
+}
+
 func (d *Downloader) registerSeriesWorker(seriesRoot string) func() {
 	if seriesRoot == "" {
 		return func() {}

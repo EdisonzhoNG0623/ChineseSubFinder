@@ -21,6 +21,11 @@ func (cb *ControllerBase) CheckEmbySettingsHandler(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	resolvedAPIKey, ok := resolveMaskedSecret(c, checkEmbyApi.APIKey, settings.Get().EmbySettings.APIKey)
+	if !ok {
+		return
+	}
+	checkEmbyApi.APIKey = resolvedAPIKey
 
 	emSettings := settings.EmbySettings{
 		Enable:                true,
