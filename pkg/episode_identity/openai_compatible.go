@@ -71,6 +71,40 @@ type chatCompletionResponse struct {
 	} `json:"choices"`
 }
 
+type ambiguityResultPayload struct {
+	SchemaVersion string            `json:"schema_version"`
+	Decision      AmbiguityDecision `json:"decision"`
+	CandidateID   string            `json:"candidate_id,omitempty"`
+	Confidence    float64           `json:"confidence"`
+	Evidence      evidenceList      `json:"evidence,omitempty"`
+	Model         string            `json:"model,omitempty"`
+	ModelVersion  string            `json:"model_version,omitempty"`
+}
+
+// evidenceList keeps the response contract strict while tolerating a common
+// OpenAI-compatible provider quirk: returning one evidence item as a string
+// instead of a one-element JSON array.
+type evidenceList []string
+
+func (e *evidenceList) UnmarshalJSON(data []byte) error {
+	var values []string
+	if err := json.Unmarshal(data, &values); err == nil {
+		*e = values
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return errors.New("AI evidence must be a string or an array of strings")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		*e = nil
+		return nil
+	}
+	*e = evidenceList{value}
+	return nil
+}
+
 func (r *OpenAICompatibleResolver) ResolveAmbiguity(ctx context.Context, request AmbiguityRequest) (AmbiguityResult, error) {
 	if len(request.Candidates) < 2 || len(request.Candidates) > 8 {
 		return AmbiguityResult{}, fmt.Errorf("AI ambiguity request must contain 2 to 8 candidates, got %d", len(request.Candidates))
@@ -83,7 +117,7 @@ func (r *OpenAICompatibleResolver) ResolveAmbiguity(ctx context.Context, request
 	payload := chatCompletionRequest{
 		Model: r.config.Model, Temperature: 0, MaxTokens: 300,
 		Messages: []chatMessage{
-			{Role: "system", Content: "You resolve subtitle ambiguity using only supplied facts. Return strict JSON with schema_version, decision, candidate_id, confidence, evidence. decision must be MATCH, NO_MATCH, or ABSTAIN. Never invent a candidate_id."},
+			{Role: "system", Content: "You resolve subtitle ambiguity using only supplied facts. Return strict JSON with schema_version, decision, candidate_id, confidence, evidence. evidence must always be a JSON array of strings, never a string. decision must be MATCH, NO_MATCH, or ABSTAIN. Never invent a candidate_id."},
 			{Role: "user", Content: string(requestJSON)},
 		},
 	}
@@ -126,11 +160,23 @@ func (r *OpenAICompatibleResolver) ResolveAmbiguity(ctx context.Context, request
 	if len(completion.Choices) != 1 || strings.TrimSpace(completion.Choices[0].Message.Content) == "" {
 		return AmbiguityResult{}, errors.New("AI response did not contain exactly one choice")
 	}
-	var result AmbiguityResult
+	var responseResult ambiguityResultPayload
 	decoder := json.NewDecoder(strings.NewReader(completion.Choices[0].Message.Content))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
+	if err := decoder.Decode(&responseResult); err != nil {
 		return AmbiguityResult{}, errors.New("AI decision was not valid strict JSON")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return AmbiguityResult{}, errors.New("AI decision was not valid strict JSON")
+	}
+	result := AmbiguityResult{
+		SchemaVersion: responseResult.SchemaVersion,
+		Decision:      responseResult.Decision,
+		CandidateID:   responseResult.CandidateID,
+		Confidence:    responseResult.Confidence,
+		Evidence:      []string(responseResult.Evidence),
+		Model:         responseResult.Model,
+		ModelVersion:  responseResult.ModelVersion,
 	}
 	result.Model = r.config.Model
 	result.ModelVersion = strings.TrimSpace(completion.Model)
