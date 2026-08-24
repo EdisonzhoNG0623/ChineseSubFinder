@@ -23,6 +23,7 @@
         <q-tab name="basic" label="基础配置" />
         <q-tab name="advanced" label="进阶配置" />
         <q-tab name="subSource" label="字幕源设置" />
+        <q-tab name="ai" label="AI识别" />
         <q-tab name="emby" label="Emby配置" />
         <q-tab name="development" label="开发人员配置" />
         <q-tab name="experiment" label="实验室" />
@@ -49,6 +50,10 @@
             <sub-source-settings />
           </q-tab-panel>
 
+          <q-tab-panel name="ai">
+            <ai-settings />
+          </q-tab-panel>
+
           <q-tab-panel name="emby">
             <emby-settings />
           </q-tab-panel>
@@ -71,7 +76,8 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import BasicSettings from 'pages/settings/SettingsPanelBasic';
 import AdvancedSettings from 'pages/settings/SettingsPanelAdvanced';
 import EmbySettings from 'pages/settings/SettingsPanelEmby';
@@ -81,8 +87,16 @@ import { isJobRunning } from 'src/store/systemState';
 import ExperimentSettings from 'pages/settings/SettingsPanelExperiment';
 import FormSubmitArea from 'pages/settings/FormSubmitArea';
 import SubSourceSettings from 'pages/settings/SettingsPanelSubSource';
+import AiSettings from 'pages/settings/SettingsPanelAI';
 
-const tab = ref('basic');
+const route = useRoute();
+const tab = ref(route.query.tab || 'basic');
+watch(
+  () => route.query.tab,
+  (value) => {
+    if (value) tab.value = value;
+  }
+);
 
 const isSettingsLoaded = computed(() => Object.keys(formModel).length);
 

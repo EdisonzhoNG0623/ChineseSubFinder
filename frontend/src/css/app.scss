@@ -1,1 +1,125 @@
-// app global css in SCSS form
+// Operational UI surfaces. Kept global so dashboard, queue and supplier views
+// share one restrained visual language without changing legacy forms.
+body {
+  background: #f5f6fa;
+  color: #202432;
+}
+
+.app-page {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 28px;
+}
+
+.page-heading {
+  margin-bottom: 24px;
+}
+
+.page-heading h1 {
+  margin: 2px 0 4px;
+  font-size: clamp(26px, 3vw, 38px);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+}
+
+.page-heading p {
+  margin: 0;
+  color: #707787;
+}
+
+.eyebrow {
+  color: #4054cf;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.metric-card,
+.surface-card,
+.daemon-card {
+  border-color: #e2e5ee;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.metric-card {
+  height: 100%;
+}
+
+.metric-label,
+.metric-note {
+  color: #7a8190;
+  font-size: 12px;
+}
+
+.metric-value {
+  margin: 5px 0 3px;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.status-orb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #9da3af;
+  box-shadow: 0 0 0 7px rgba(157, 163, 175, 0.14);
+}
+
+.status-orb.is-running {
+  background: #2eaa71;
+  box-shadow: 0 0 0 7px rgba(46, 170, 113, 0.14);
+}
+
+.trend-list {
+  display: grid;
+  gap: 16px;
+}
+
+.trend-row {
+  display: grid;
+  grid-template-columns: 44px minmax(80px, 1fr) 180px;
+  align-items: center;
+  gap: 12px;
+}
+
+.trend-day,
+.trend-count {
+  color: #6d7484;
+  font-size: 12px;
+}
+
+.trend-track {
+  display: flex;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef0f5;
+}
+
+.trend-success { background: #39a878; }
+.trend-failure { background: #e27a63; }
+
+.empty-state {
+  padding: 34px 16px;
+  color: #8a91a0;
+  text-align: center;
+}
+
+.filter-bar {
+  background: #fafbfc;
+}
+
+@media (max-width: 700px) {
+  .app-page { padding: 18px 14px; }
+  .trend-row { grid-template-columns: 38px 1fr; }
+  .trend-count { grid-column: 2; }
+}

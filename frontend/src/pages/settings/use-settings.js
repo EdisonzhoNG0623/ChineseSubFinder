@@ -103,7 +103,12 @@ export const getExportSettings = (includeSensitive = false) => {
     delete data.common_settings.threads;
     delete data.emby_settings.api_key;
     delete data.emby_settings.address_url;
+    delete data.advanced_settings.tmdb_api_settings.api_key;
+    delete data.subtitle_sources.assrt_settings.token;
+    delete data.subtitle_sources.subtitle_best_settings.api_key;
+    delete data.subtitle_sources.subdl_settings.api_key;
     delete data.experimental_function.api_key_settings;
+    delete data.experimental_function.ai_settings.api_key;
   }
   return data;
 };

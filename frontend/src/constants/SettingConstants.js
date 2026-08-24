@@ -38,9 +38,11 @@ export const DEFAULT_SUB_SOURCE_URL_MAP = {
   xunlei: 'http://sub.xmp.sandai.net:8000/subxl/%s.json',
   shooter: 'https://www.shooter.cn/api/subapi.php',
   subhd: 'https://subhd.tv',
-  zimuku: 'https://zimuku.org',
+  zimuku: 'https://srtku.com',
   assrt: 'https://api.assrt.net/v1',
   a4k: 'https://www.a4k.net',
+  subtitle_best: 'https://api.subtitle.best/share-sub/v1',
+  subdl: 'https://api.subdl.com',
 };
 
 export const PROXY_TYPE_HTTP = 'http';
@@ -53,8 +55,10 @@ export const PROXY_TYPE_NAME_MAP = {
 
 export const VIDEO_TYPE_MOVIE = 0;
 export const VIDEO_TYPE_TV = 1;
+export const VIDEO_TYPE_ANIME = 2;
 
 export const VIDEO_TYPE_NAME_MAP = {
   [VIDEO_TYPE_MOVIE]: '电影',
   [VIDEO_TYPE_TV]: '电视剧',
+  [VIDEO_TYPE_ANIME]: '动漫',
 };

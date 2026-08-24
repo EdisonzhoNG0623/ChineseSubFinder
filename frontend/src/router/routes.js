@@ -39,6 +39,12 @@ const routes = [
         meta: { title: '下载队列', icon: 'assignment' },
       },
       {
+        name: 'suppliers',
+        path: 'suppliers',
+        component: () => import('pages/suppliers/index.vue'),
+        meta: { title: '字幕源', icon: 'hub' },
+      },
+      {
         name: 'settings',
         path: 'settings',
         component: () => import('pages/settings/index.vue'),

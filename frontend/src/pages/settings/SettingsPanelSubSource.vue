@@ -24,6 +24,7 @@
           <q-input
             :disable="!form.assrt_settings.enabled"
             v-model="form.assrt_settings.token"
+            type="password"
             placeholder="填写你的API Token"
             label="Assrt API Token"
             standout
@@ -59,6 +60,7 @@
             <q-input
               :disable="!form.subtitle_best_settings.enabled"
               v-model="form.subtitle_best_settings.api_key"
+              type="password"
               placeholder="填写你的ApiKey"
               label="SubtitleBest ApiKey"
               standout

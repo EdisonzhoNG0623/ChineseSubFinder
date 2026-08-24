@@ -154,7 +154,12 @@
 
       <q-item>
         <q-item-section>
-          <q-item-label class="q-mb-sm"> 字幕源设置</q-item-label>
+          <q-item-label class="q-mb-sm row items-center">
+            <span>字幕源设置</span><q-space /><q-btn flat dense color="primary" label="查看运行状态" to="/suppliers" />
+          </q-item-label>
+          <q-banner rounded class="bg-orange-1 text-orange-10 q-mb-sm">
+            A4K 公共域名已停止服务，保留该项仅供配置自建兼容镜像；请勿把旧公共域名视为可用地址。
+          </q-banner>
           <q-item v-for="item in form.suppliers_settings" :key="item" clickable>
             <q-item-section avatar class="text-bold" style="width: 120px">
               {{ item.name }}

@@ -27,3 +27,12 @@ export const JOB_STATUS_OPTIONS = Object.keys(JOB_STATUS_MAP).map((k) => ({
   label: JOB_STATUS_MAP[k],
   value: parseInt(k, 10),
 }));
+
+export const ERROR_CATEGORY_META = {
+  NONE: { label: '无错误', color: 'grey-6' },
+  NO_SUBTITLE: { label: '未命中字幕', color: 'warning' },
+  TRANSIENT: { label: '网络/临时错误', color: 'orange-8' },
+  LOCAL: { label: '本地文件错误', color: 'negative' },
+  PROVIDER_BLOCKED: { label: '字幕源限流/封禁', color: 'deep-orange' },
+  UNKNOWN: { label: '未知错误', color: 'grey-8' },
+};

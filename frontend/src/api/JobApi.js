@@ -9,6 +9,8 @@ class JobApi extends BaseApi {
 
   getList = () => this.http('/v1/jobs/list');
 
+  getPage = (params) => this.http('/v1/jobs', params);
+
   update = (id, data) => this.http(`/v1/jobs/change-job-status`, { id, ...data }, 'POST');
 
   getLog = (id) => this.http(`/v1/jobs/log`, { id }, 'POST');

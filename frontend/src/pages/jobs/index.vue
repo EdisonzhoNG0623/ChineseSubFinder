@@ -1,316 +1,321 @@
 <template>
-  <q-page class="q-pa-md">
-    <div class="row items-center">
-      <div class="q-gutter-xs">
-        <q-btn
-          :disable="selected.length === 0"
-          size="md"
-          icon="expand_less"
-          label="升级"
-          color="primary"
-          @click="batchUpdatePriority('high')"
-        />
-
-        <q-btn
-          :disable="selected.length === 0"
-          size="md"
-          icon="expand_more"
-          label="降级"
-          color="primary"
-          @click="batchUpdatePriority('low')"
-        />
-
-        <q-btn :disable="selected.length === 0" size="md" label="修改状态" color="primary" @click="batchUpdateStatus" />
+  <q-page class="app-page">
+    <section class="page-heading row items-end q-col-gutter-md">
+      <div class="col">
+        <div class="eyebrow">DOWNLOAD QUEUE</div>
+        <h1>下载队列</h1>
+        <p>服务端筛选与分页，重试时间和失败原因可直接诊断。</p>
       </div>
+      <q-btn flat round icon="refresh" :loading="loading" @click="load" title="刷新" />
+    </section>
 
-      <q-space />
-
-      <div class="q-gutter-sm row">
-        <q-select
-          label="状态"
-          v-model.number="form.status"
-          :options="statusOptions"
-          outlined
-          dense
-          map-options
-          emit-value
-          style="width: 120px"
-        ></q-select>
-        <q-select
-          v-model.number="form.videoType"
-          :options="videoTypeOptions"
-          label="类型"
-          emit-value
-          map-options
-          outlined
-          dense
-          style="width: 100px"
-        ></q-select>
-        <q-select
-          v-model="form.priority"
-          :options="priorityOptions"
-          label="优先级"
-          outlined
-          dense
-          map-options
-          emit-value
-          style="width: 130px"
-        ></q-select>
-        <q-input v-model="form.search" outlined label="输入关键字搜索" dense></q-input>
+    <div class="row q-col-gutter-md q-mb-md">
+      <div v-for="metric in summaryMetrics" :key="metric.label" class="col-6 col-md-3">
+        <q-card flat bordered class="metric-card"
+          ><q-card-section
+            ><div class="metric-label">{{ metric.label }}</div>
+            <div class="metric-value" :class="metric.className">{{ metric.value }}</div>
+            <div class="metric-note">{{ metric.note }}</div></q-card-section
+          ></q-card
+        >
       </div>
     </div>
 
-    <q-separator class="q-mt-md" />
+    <q-card flat bordered class="surface-card">
+      <q-card-section class="filter-bar row q-col-gutter-sm items-center">
+        <div class="col-12 col-md">
+          <q-input
+            v-model="filters.search"
+            debounce="450"
+            dense
+            outlined
+            clearable
+            placeholder="名称、路径或媒体 ID"
+            prefix="搜索"
+            ><template #prepend><q-icon name="search" /></template
+          ></q-input>
+        </div>
+        <div class="col-6 col-sm-3 col-md-2">
+          <q-select
+            v-model="filters.status"
+            :options="statusOptions"
+            label="状态"
+            dense
+            outlined
+            clearable
+            emit-value
+            map-options
+          />
+        </div>
+        <div class="col-6 col-sm-3 col-md-2">
+          <q-select
+            v-model="filters.videoType"
+            :options="videoTypeOptions"
+            label="类型"
+            dense
+            outlined
+            clearable
+            emit-value
+            map-options
+          />
+        </div>
+        <div class="col-6 col-sm-3 col-md-2">
+          <q-select
+            v-model="filters.errorCategory"
+            :options="errorOptions"
+            label="失败原因"
+            dense
+            outlined
+            clearable
+            emit-value
+            map-options
+          />
+        </div>
+        <div class="col-6 col-sm-3 col-md-2">
+          <q-select
+            v-model="filters.priority"
+            :options="priorityOptions"
+            label="优先级"
+            dense
+            outlined
+            clearable
+            emit-value
+            map-options
+          />
+        </div>
+      </q-card-section>
 
-    <q-table
-      :columns="columns"
-      :rows="filteredData"
-      flat
-      selection="multiple"
-      v-model:selected="selected"
-      class="sticky-column-table"
-      :pagination="{ rowsPerPage: 20 }"
-    >
-      <template v-slot:body-cell-jobStatus="{ row }">
-        <q-td>
-          <span
-            :style="{
-              background: JOB_STATUS_COLOR_MAP[row.job_status],
-              color: 'white',
-              borderRadius: '5px',
-              padding: '2px 6px',
-              fontSize: '12px',
-            }"
-            >{{ JOB_STATUS_MAP[row.job_status] }}</span
-          >
-        </q-td>
-      </template>
+      <q-separator />
+      <q-card-section v-if="selected.length" class="row items-center q-gutter-sm bg-blue-grey-1">
+        <span class="text-weight-medium">已选 {{ selected.length }} 项</span>
+        <q-btn
+          size="sm"
+          outline
+          color="primary"
+          icon="expand_less"
+          label="提高优先级"
+          @click="batchUpdatePriority('high')"
+        />
+        <q-btn
+          size="sm"
+          outline
+          color="primary"
+          icon="expand_more"
+          label="降低优先级"
+          @click="batchUpdatePriority('low')"
+        />
+        <q-btn size="sm" outline color="primary" label="修改状态" @click="batchUpdateStatus" />
+      </q-card-section>
 
-      <template v-slot:body-cell-actions="{ row }">
-        <q-td>
-          <job-detail-btn-dialog :data="row" />
-          <job-log-btn-dialog :data="row" />
-        </q-td>
-      </template>
-    </q-table>
+      <q-table
+        v-model:pagination="pagination"
+        v-model:selected="selected"
+        :rows="rows"
+        :columns="columns"
+        :loading="loading"
+        row-key="id"
+        selection="multiple"
+        binary-state-sort
+        flat
+        @request="onRequest"
+      >
+        <template #body-cell-jobStatus="{ row }"
+          ><q-td
+            ><q-badge
+              :text-color="row.job_status === JOB_STATUS_IGNORE ? 'dark' : 'white'"
+              :style="{ backgroundColor: JOB_STATUS_COLOR_MAP[row.job_status] }"
+              >{{ JOB_STATUS_MAP[row.job_status] }}</q-badge
+            ></q-td
+          ></template
+        >
+        <template #body-cell-name="{ row }"
+          ><q-td class="job-name-cell"
+            ><div class="text-weight-medium ellipsis">{{ row.video_name }}</div>
+            <div v-if="row.identity?.is_anime" class="text-caption text-purple">动漫 · {{ identityText(row) }}</div>
+            <div class="text-caption text-grey-7 ellipsis">{{ row.video_f_path }}</div></q-td
+          ></template
+        >
+        <template #body-cell-priority="{ row }"
+          ><q-td
+            ><q-badge outline color="blue-grey">P{{ row.task_priority }}</q-badge></q-td
+          ></template
+        >
+        <template #body-cell-nextAttemptAt="{ row }"
+          ><q-td
+            ><div>{{ retryText(row) }}</div>
+            <q-badge v-if="row.retry?.category !== 'NONE'" outline :color="errorMeta(row.retry.category).color">{{
+              errorMeta(row.retry.category).label
+            }}</q-badge></q-td
+          ></template
+        >
+        <template #body-cell-updatedAt="{ row }"
+          ><q-td>{{ formatTime(row.update_time) }}</q-td></template
+        >
+        <template #body-cell-actions="{ row }"
+          ><q-td class="sticky-action"><job-detail-btn-dialog :data="row" /><job-log-btn-dialog :data="row" /></q-td
+        ></template>
+        <template #no-data><div class="full-width empty-state">当前筛选条件下没有任务。</div></template>
+      </q-table>
+    </q-card>
   </q-page>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
+import dayjs from 'dayjs';
+import { useQuasar } from 'quasar';
 import JobApi from 'src/api/JobApi';
+import JobLogBtnDialog from 'pages/jobs/JobLogBtnDialog';
+import JobDetailBtnDialog from 'pages/jobs/JobDetailBtnDialog';
 import { SystemMessage } from 'src/utils/message';
 import { VIDEO_TYPE_NAME_MAP } from 'src/constants/SettingConstants';
 import {
+  ERROR_CATEGORY_META,
   JOB_STATUS_COLOR_MAP,
   JOB_STATUS_IGNORE,
   JOB_STATUS_MAP,
   JOB_STATUS_OPTIONS,
   JOB_STATUS_PENDING,
 } from 'src/constants/JobConstants';
-import { useQuasar } from 'quasar';
-import JobLogBtnDialog from 'pages/jobs/JobLogBtnDialog';
-import JobDetailBtnDialog from 'pages/jobs/JobDetailBtnDialog';
 
 const $q = useQuasar();
-
-const columns = [
-  // { label: 'ID', field: 'id' },
-  { label: '状态', field: 'job_status', name: 'jobStatus', align: 'left' },
-  { label: '类型', field: 'video_type', format: (val) => VIDEO_TYPE_NAME_MAP[val], align: 'left' },
-  // { label: '路径', field: 'video_f_path' },
-  { label: '名称', field: 'video_name', width: '100px', align: 'left' },
-  // { label: '特征码', field: 'feature' },
-  // { label: '连续剧目录', field: 'series_root_dir_path' },
-  // { label: '季', field: 'season' },
-  // { label: '集', field: 'episode' },
-  { label: '优先级', field: 'task_priority', align: 'left' },
-  // { label: '视频创建时间', field: 'created_time' },
-  { label: '创建时间', field: 'added_time', align: 'left' },
-  { label: '更新时间', field: 'update_time', align: 'left' },
-  // { label: '媒体服务器ID', field: 'media_server_inside_video_id' },
-  { label: '错误信息', field: 'error_info', align: 'left' },
-  { label: '下载次数', field: 'download_times', align: 'left' },
-  { label: '重试次数', field: 'retry_times', align: 'left' },
-  { label: '操作', name: 'actions', align: 'left', headerClasses: 'sticky-column-header' },
-];
-
-const data = ref([]);
+const rows = ref([]);
 const selected = ref([]);
-const form = reactive({
-  search: '',
-  status: null,
-  videoType: null,
-  priority: null,
-});
-
-const JOB_PRIORITY_NUM2STR_MAP = {
-  0: '高',
-  1: '高',
-  2: '高',
-  3: '高',
-  4: '中',
-  5: '中',
-  6: '中',
-  7: '低',
-  8: '低',
-  9: '低',
-  10: '低',
-};
-
-const getData = async () => {
-  const [res, err] = await JobApi.getList();
-  if (err !== null) {
-    SystemMessage.error(err.message);
-  } else {
-    data.value = res.all_jobs;
-  }
-};
-
-const refresh = () => {
-  selected.value = [];
-  getData();
-};
-
-const filteredData = computed(() => {
-  const { search, status, videoType, priority } = form;
-  return data.value.filter((item) => {
-    if (search !== '') {
-      if (
-        !(
-          item.video_name.includes(search) ||
-          item.video_f_path.includes(search) ||
-          item.series_root_dir_path.includes(search) ||
-          String(item.media_server_inside_video_id) === search
-        )
-      ) {
-        return false;
-      }
-    }
-
-    if (status !== null && item.job_status !== status) {
-      return false;
-    }
-
-    if (videoType !== null && item.video_type !== videoType) {
-      return false;
-    }
-
-    const betweenOfNumber = (num, min, max) => num >= min && num <= max;
-    if (priority !== null && item.task_priority !== priority) {
-      // 0-3为高
-      if (priority === 'high' && !betweenOfNumber(item.task_priority, 0, 3)) {
-        return false;
-      }
-      // 7-10为低
-      if (priority === 'low' && !betweenOfNumber(item.task_priority, 7, 10)) {
-        return false;
-      }
-      // 4-6为中
-      if (priority === 'middle' && !betweenOfNumber(item.task_priority, 4, 6)) {
-        return false;
-      }
-    }
-
-    return true;
-  });
-});
-
-const statusOptions = [{ label: '全部', value: null }, ...JOB_STATUS_OPTIONS];
-const videoTypeOptions = [
-  { label: '全部', value: null },
-  ...Object.keys(VIDEO_TYPE_NAME_MAP).map((key) => ({ label: VIDEO_TYPE_NAME_MAP[key], value: parseInt(key, 10) })),
+const loading = ref(false);
+const summary = reactive({ total: 0, by_status: {}, by_error_category: {}, retry_scheduled: 0, ready_now: 0 });
+const filters = reactive({ search: '', status: null, videoType: null, errorCategory: null, priority: null });
+const pagination = ref({ page: 1, rowsPerPage: 20, rowsNumber: 0, sortBy: 'updatedAt', descending: true });
+const columns = [
+  { name: 'jobStatus', label: '状态', field: 'job_status', align: 'left' },
+  { name: 'name', label: '媒体', field: 'video_name', align: 'left', sortable: true },
+  { name: 'priority', label: '优先级', field: 'task_priority', align: 'left', sortable: true },
+  {
+    name: 'nextAttemptAt',
+    label: '重试诊断',
+    field: (row) => row.retry?.next_attempt_at,
+    align: 'left',
+    sortable: true,
+  },
+  { name: 'updatedAt', label: '更新时间', field: 'update_time', align: 'left', sortable: true },
+  { name: 'actions', label: '操作', align: 'left' },
 ];
+const statusOptions = JOB_STATUS_OPTIONS;
+const videoTypeOptions = Object.entries(VIDEO_TYPE_NAME_MAP).map(([value, label]) => ({ label, value: Number(value) }));
+const errorOptions = Object.entries(ERROR_CATEGORY_META)
+  .filter(([key]) => key !== 'NONE')
+  .map(([value, meta]) => ({ value, label: meta.label }));
 const priorityOptions = [
-  { label: '全部', value: null },
-  { label: '低（7-10）', value: 'low' },
-  { label: '中（4-6）', value: 'middle' },
-  { label: '高（0-3）', value: 'high' },
+  { label: '高（P0–P3）', value: 'high' },
+  { label: '中（P4–P6）', value: 'middle' },
+  { label: '低（P7–P10）', value: 'low' },
 ];
+let requestSequence = 0;
+const summaryMetrics = computed(() => [
+  { label: '任务总数', value: summary.total, note: '当前完整队列' },
+  { label: '可立即处理', value: summary.ready_now, note: '等待且已到执行时间', className: 'text-primary' },
+  { label: '等待重试', value: summary.retry_scheduled, note: '退避调度中', className: 'text-warning' },
+  {
+    label: '未命中字幕',
+    value: summary.by_error_category?.NO_SUBTITLE || 0,
+    note: '建议检查源与识别结果',
+    className: 'text-negative',
+  },
+]);
 
-const batchUpdatePriority = async (priority) => {
-  $q.dialog({
-    title: '操作确认',
-    message: `确认修改优先级？`,
-    cancel: true,
-    persistent: true,
-    focus: 'none',
-  }).onOk(async () => {
-    const results = await Promise.allSettled(
-      selected.value.map((item) =>
-        JobApi.update(item.id, {
-          task_priority: priority,
-        })
-      )
-    );
-    const errorCount = results.filter(({ value: [, err] }) => err !== null).length;
-    if (errorCount > 0) {
-      SystemMessage.error(`${errorCount}个任务修改优先级失败！`);
-    } else {
-      SystemMessage.success('成功修改优先级');
-    }
-
-    refresh();
+const load = async () => {
+  requestSequence += 1;
+  const sequence = requestSequence;
+  loading.value = true;
+  const p = pagination.value;
+  const params = {
+    page: p.page,
+    pageSize: p.rowsPerPage,
+    sortBy: p.sortBy || 'updatedAt',
+    sortOrder: p.descending ? 'desc' : 'asc',
+  };
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== null && value !== '') params[key] = value;
   });
+  const [res, err] = await JobApi.getPage(params);
+  if (sequence !== requestSequence) return;
+  loading.value = false;
+  if (err) {
+    SystemMessage.error(err.message);
+    return;
+  }
+  rows.value = res.data || [];
+  Object.assign(summary, res.summary || {});
+  pagination.value.rowsNumber = res.pagination?.total_items || 0;
+  selected.value = [];
 };
-
-const batchUpdateStatus = async () => {
-  $q.dialog({
-    title: '修改状态',
-    message: '需要变更成哪个状态？',
-    options: {
-      type: 'radio',
-      items: [
-        { label: JOB_STATUS_MAP[JOB_STATUS_PENDING], value: JOB_STATUS_PENDING },
-        { label: JOB_STATUS_MAP[JOB_STATUS_IGNORE], value: JOB_STATUS_IGNORE },
-      ],
-    },
-    cancel: true,
-    persistent: true,
-  }).onOk(async (val) => {
-    const results = await Promise.allSettled(
-      selected.value.map((item) =>
-        JobApi.update(item.id, {
-          job_status: val,
-          task_priority: JOB_PRIORITY_NUM2STR_MAP[item.task_priority],
-        })
-      )
+const onRequest = ({ pagination: next }) => {
+  pagination.value = next;
+  load();
+};
+watch(
+  filters,
+  () => {
+    pagination.value.page = 1;
+    load();
+  },
+  { deep: true }
+);
+const formatTime = (value) => (value ? dayjs(value).format('MM-DD HH:mm') : '—');
+const errorMeta = (category) => ERROR_CATEGORY_META[category] || ERROR_CATEGORY_META.UNKNOWN;
+const retryText = (row) => {
+  if (row.retry?.is_forced) return '已手动插队';
+  if (!row.retry?.is_scheduled) return row.job_status === JOB_STATUS_PENDING ? '可立即执行' : '—';
+  if (row.retry?.is_ready) return '退避已结束';
+  const seconds = Math.max(0, row.retry?.retry_in_seconds || 0);
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} 分钟后`;
+  return `${Math.ceil(seconds / 3600)} 小时后`;
+};
+const identityText = (row) =>
+  row.absolute_episode ? `绝对集 E${row.absolute_episode}` : `S${row.season}E${row.episode}`;
+const mutateSelected = async (payloadFor) => {
+  const results = await Promise.all(selected.value.map((item) => JobApi.update(item.id, payloadFor(item))));
+  const errors = results.filter(([, err]) => err).length;
+  if (errors) SystemMessage.error(`${errors} 个任务修改失败`);
+  else SystemMessage.success('任务已更新');
+  load();
+};
+const priorityLabel = (priority) => {
+  if (priority <= 3) return '高';
+  if (priority >= 7) return '低';
+  return '中';
+};
+const batchUpdatePriority = (priority) =>
+  $q
+    .dialog({ title: '确认修改所选任务优先级？', cancel: true })
+    .onOk(() => mutateSelected(() => ({ task_priority: priority })));
+const batchUpdateStatus = () =>
+  $q
+    .dialog({
+      title: '修改状态',
+      options: {
+        type: 'radio',
+        items: [
+          { label: JOB_STATUS_MAP[JOB_STATUS_PENDING], value: JOB_STATUS_PENDING },
+          { label: JOB_STATUS_MAP[JOB_STATUS_IGNORE], value: JOB_STATUS_IGNORE },
+        ],
+      },
+      cancel: true,
+    })
+    .onOk((status) =>
+      mutateSelected((item) => ({
+        job_status: status,
+        task_priority: priorityLabel(item.task_priority),
+      }))
     );
-    const errorCount = results.filter(({ value: [, err] }) => err !== null).length;
-    if (errorCount > 0) {
-      SystemMessage.error(`${errorCount}个任务修改状态失败！`);
-    } else {
-      SystemMessage.success('成功修改任务状态');
-    }
 
-    refresh();
-  });
-};
-
-onMounted(() => {
-  getData();
-});
+load();
 </script>
 
-<style lang="scss">
-.sticky-column-table {
-  thead tr:last-child th:last-child {
-    background-color: #fff;
-  }
-
-  td:last-child {
-    background-color: #fff;
-  }
-
-  th:last-child,
-  td:last-child {
-    position: sticky;
-    right: 0;
-    z-index: 1;
-    box-shadow: -5px 0px 5px -1px #ddd;
-  }
-  td:last-child {
-    //border-left: 1px solid $grey-3;
-  }
+<style scoped>
+.job-name-cell {
+  max-width: 420px;
+}
+.sticky-action {
+  white-space: nowrap;
 }
 </style>
