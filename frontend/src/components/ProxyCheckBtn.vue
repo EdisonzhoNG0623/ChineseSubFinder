@@ -1,9 +1,13 @@
 <template>
   <q-btn standout dense flat size="sm" title="检查连接" :loading="checking" @click="checkProxy" v-bind="$attrs" />
   <q-dialog v-model="show">
-    <q-card style="width: 400px">
-      <q-card-section>
-        <div class="text-body1">代理检测结果</div>
+    <q-card class="compact-dialog">
+      <q-card-section class="dialog-header row items-center">
+        <div>
+          <div class="eyebrow">CONNECTIVITY</div>
+          <div class="text-h6">代理检测结果</div>
+        </div>
+        <q-space /><q-btn v-close-popup flat round dense icon="close" aria-label="关闭" />
       </q-card-section>
 
       <q-separator />

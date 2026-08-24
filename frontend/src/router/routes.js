@@ -10,45 +10,47 @@ const routes = [
         name: 'overview',
         path: 'overview',
         component: () => import('pages/overview/index.vue'),
-        meta: { title: '总览', icon: 'home' },
+        meta: { title: '运行总览', icon: 'space_dashboard' },
       },
       {
         name: 'library',
         path: 'library',
         component: RouterPlaceholder,
-        meta: { title: '库', icon: 'video_library' },
+        meta: { title: '媒体库', icon: 'video_library' },
         children: [
           {
             name: 'library.movie.list',
-            path: 'library/movies',
+            path: 'movies',
             component: () => import('pages/library/movies/index.vue'),
             meta: { title: '电影', icon: 'movie' },
           },
           {
             name: 'library.tv.list',
-            path: 'library/tvs',
+            path: 'tvs',
             component: () => import('pages/library/tvs/index.vue'),
             meta: { title: '连续剧', icon: 'live_tv' },
           },
         ],
       },
+      { path: 'library/library/movies', redirect: { name: 'library.movie.list' } },
+      { path: 'library/library/tvs', redirect: { name: 'library.tv.list' } },
       {
         name: 'jobs',
         path: 'jobs',
         component: () => import('pages/jobs/index.vue'),
-        meta: { title: '下载队列', icon: 'assignment' },
+        meta: { title: '下载队列', icon: 'format_list_bulleted' },
       },
       {
         name: 'suppliers',
         path: 'suppliers',
         component: () => import('pages/suppliers/index.vue'),
-        meta: { title: '字幕源', icon: 'hub' },
+        meta: { title: '字幕源状态', icon: 'hub' },
       },
       {
         name: 'settings',
         path: 'settings',
         component: () => import('pages/settings/index.vue'),
-        meta: { title: '配置中心', icon: 'settings' },
+        meta: { title: '系统设置', icon: 'tune' },
       },
     ],
   },
@@ -67,11 +69,6 @@ const routes = [
   {
     path: '/setup',
     component: () => import('pages/setup/index.vue'),
-  },
-
-  {
-    path: '/test',
-    component: () => import('components/ShareSubtitle/ShareSubtitlePanel.test.vue'),
   },
 
   // Always leave this as last one,

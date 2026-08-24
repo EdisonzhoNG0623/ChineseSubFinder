@@ -29,21 +29,22 @@ export const useAppStatusLoading = () => {
   };
 
   const getPrepareStatus = async () => {
-    const [res] = await SystemApi.getPrepareStatus();
+    const [res, err] = await SystemApi.getPrepareStatus();
+    if (err || !res) return false;
     systemState.preJobStatus = res;
+    return true;
   };
 
   const { resetInterval, stopInterval } = useInterval(
     async () => {
-      await getPrepareStatus();
-      updateDialog();
+      if (await getPrepareStatus()) updateDialog();
     },
     1000,
     false
   );
 
   const startLoading = async () => {
-    await getPrepareStatus();
+    if (!(await getPrepareStatus())) return;
     updateDialog();
     resetInterval();
   };

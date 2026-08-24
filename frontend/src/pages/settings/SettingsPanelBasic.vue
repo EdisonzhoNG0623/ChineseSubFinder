@@ -1,6 +1,6 @@
 <template>
-  <div>
-    <q-list style="max-width: 600px" dense>
+  <div class="settings-panel">
+    <q-list class="settings-form-list" dense>
       <q-item>
         <q-item-section>
           <q-item-label>字幕扫描时机</q-item-label>
@@ -18,7 +18,7 @@
                 :options="scanIntervalOptions"
                 standout
                 dense
-                style="width: 200px"
+                class="settings-control"
                 :rules="[(val) => !!val || '不能为空']"
                 emit-value
                 map-options
@@ -44,7 +44,7 @@
                 dense
                 emit-value
                 map-options
-                style="width: 200px"
+                class="settings-control"
                 :rules="[
                   (val) => !!val || !!val?.length || '不能为空',
                   (val) => val.length <= 4 || '最多选择4个时间点',
@@ -64,7 +64,11 @@
               <q-item-label>自定义规则</q-item-label>
               <q-item-label caption>
                 详细规则参考
-                <a href="https://pkg.go.dev/github.com/robfig/cron/v3" target="_blank" class="text-primary"
+                <a
+                  href="https://pkg.go.dev/github.com/robfig/cron/v3"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-primary"
                   >robfig/cron 文档</a
                 >
               </q-item-label>
@@ -74,7 +78,7 @@
                 v-model="scanCronString2"
                 standout
                 dense
-                style="width: 200px"
+                class="settings-control"
                 :rules="[(val) => !!val || '不能为空', validateCronTime]"
                 @update:model-value="handleScanCustomChange"
                 :disable="scanType !== 2"
@@ -97,13 +101,14 @@
 
       <q-item>
         <q-item-section>
-          <q-item-label>设备性能选择</q-item-label>
+          <q-item-label>并发下载线程</q-item-label>
+          <q-item-label caption>线程越多，对 CPU、网络和字幕源的压力越大</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <div class="row">
-            <q-radio v-model="form.threads" :val="1" label="弱鸡（1线程）" />
-            <q-radio v-model="form.threads" :val="3" label="一般（3线程）" />
-            <q-radio v-model="form.threads" :val="6" label="超猛（6线程）" />
+            <q-radio v-model="form.threads" :val="1" label="低负载（1）" />
+            <q-radio v-model="form.threads" :val="3" label="均衡（3）" />
+            <q-radio v-model="form.threads" :val="6" label="高性能（6）" />
           </div>
         </q-item-section>
       </q-item>
@@ -112,7 +117,8 @@
 
       <q-item>
         <q-item-section class="items-start" top>
-          <q-item-label>电影的目录</q-item-label>
+          <q-item-label>电影目录</q-item-label>
+          <q-item-label caption>容器内可访问的实际路径</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <q-btn
@@ -134,7 +140,7 @@
                 dense
                 lazy-rules
                 :rules="[(val) => !!val || '不能为空', validateRemotePath]"
-                style="width: 200px"
+                class="settings-control"
               />
               <q-btn
                 v-if="i === 0"
@@ -165,7 +171,8 @@
 
       <q-item>
         <q-item-section class="items-start" top>
-          <q-item-label>连续剧的目录</q-item-label>
+          <q-item-label>连续剧目录</q-item-label>
+          <q-item-label caption>容器内可访问的实际路径</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <q-btn
@@ -186,7 +193,7 @@
                 standout
                 dense
                 :rules="[(val) => !!val || '不能为空', validateRemotePath]"
-                style="width: 200px"
+                class="settings-control"
               />
               <q-btn
                 v-if="i === 0"

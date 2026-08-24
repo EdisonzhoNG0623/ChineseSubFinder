@@ -7,5 +7,3 @@ export default {
   name: 'RouterPlaceholder',
 };
 </script>
-
-<style scoped></style>

@@ -1,13 +1,31 @@
 <template>
   <q-page class="app-page">
-    <section class="page-heading row items-end q-col-gutter-md">
-      <div class="col">
+    <section class="page-heading">
+      <div>
         <div class="eyebrow">OPERATIONS OVERVIEW</div>
         <h1>字幕自动化总览</h1>
         <p>队列、定时扫描和字幕源状态每 15 秒自动更新。</p>
       </div>
-      <q-btn-toggle v-model="days" unelevated toggle-color="primary" :options="dayOptions" @update:model-value="load" />
+      <q-btn-toggle
+        class="page-heading__actions"
+        v-model="days"
+        unelevated
+        toggle-color="primary"
+        :options="dayOptions"
+        @update:model-value="load"
+      />
     </section>
+
+    <div v-if="loadError" class="status-strip status-strip--danger q-mb-lg" role="alert">
+      <q-icon name="cloud_off" />
+      <div class="col">
+        <strong>总览数据暂时不可用</strong>
+        <div class="text-caption">{{ loadError }}</div>
+      </div>
+      <q-btn flat dense label="重试" :loading="loading" @click="load(false)" />
+    </div>
+
+    <q-linear-progress v-if="loading && !hasLoaded" indeterminate color="primary" class="q-mb-lg" />
 
     <q-card flat bordered class="daemon-card q-mb-lg">
       <q-card-section class="row items-center q-col-gutter-md">
@@ -25,8 +43,8 @@
       </q-card-section>
     </q-card>
 
-    <div class="row q-col-gutter-md q-mb-lg">
-      <div v-for="metric in queueMetrics" :key="metric.label" class="col-6 col-md-3">
+    <div class="metric-grid q-mb-lg">
+      <div v-for="metric in queueMetrics" :key="metric.label">
         <q-card flat bordered class="metric-card"
           ><q-card-section>
             <div class="metric-label">{{ metric.label }}</div>
@@ -134,6 +152,9 @@ const $q = useQuasar();
 const overview = reactive({ queue: {}, schedule: {}, suppliers: [], outcomes: [], ai: {} });
 const days = ref(7);
 const submitting = ref(false);
+const loading = ref(false);
+const hasLoaded = ref(false);
+const loadError = ref('');
 const dayOptions = [
   { label: '24 小时', value: 1 },
   { label: '7 天', value: 7 },
@@ -186,12 +207,16 @@ const supplierLabel = (health) =>
     DISABLED: '未启用',
     UNKNOWN: '待检测',
   }[health] || health);
-const load = async () => {
+const load = async (silent = true) => {
+  if (!silent) loading.value = true;
   const [res, err] = await OverviewApi.get(days.value);
+  loading.value = false;
   if (err) {
-    SystemMessage.error(err.message);
+    loadError.value = err.message || '无法连接到服务端';
     return;
   }
+  loadError.value = '';
+  hasLoaded.value = true;
   Object.assign(overview, res);
 };
 const changeDaemon = (action, message) =>
@@ -209,5 +234,5 @@ const changeDaemon = (action, message) =>
 const startJobs = () => changeDaemon(() => JobApi.start(), '是否立即运行？');
 const stopJobs = () => changeDaemon(() => JobApi.stop(), '是否停止守护进程？');
 
-useInterval(load, 15000);
+useInterval(() => load(hasLoaded.value), 15000);
 </script>

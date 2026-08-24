@@ -3,36 +3,43 @@
     <q-list dense>
       <q-item>
         <q-item-section>
-          <q-item-label>Emby的内网URL</q-item-label>
+          <q-item-label>Emby 服务地址</q-item-label>
+          <q-item-label caption>填写当前容器可访问的完整 URL</q-item-label>
         </q-item-section>
         <q-item-section>
           <q-input
             v-model="setupState.form.emby.url"
-            standout
+            outlined
+            label="例如 http://192.168.1.10:8096"
             dense
-            :rules="[
-              (val) => !!val || '不能为空',
-              (val) => val.match(/^https?:\/\/\w+(\.\w+)*(:[0-9]+)?\/?(\/[.\w]*)*$/) || '请输入正确的URL',
-            ]"
+            :rules="[(val) => !!val || '不能为空', validateServerUrl]"
           />
         </q-item-section>
       </q-item>
       <q-item>
         <q-item-section>
-          <q-item-label>APIKey</q-item-label>
+          <q-item-label>Emby API Key</q-item-label>
         </q-item-section>
         <q-item-section>
-          <q-input v-model="setupState.form.emby.apiKey" standout dense :rules="[(val) => !!val || '不能为空']" />
+          <q-input
+            v-model="setupState.form.emby.apiKey"
+            type="password"
+            autocomplete="new-password"
+            outlined
+            dense
+            :rules="[(val) => !!val || '请输入 API Key']"
+          />
         </q-item-section>
       </q-item>
       <q-item>
         <q-item-section>
-          <q-item-label>获取最多的剧集数量</q-item-label>
+          <q-item-label>单次同步上限</q-item-label>
+          <q-item-label caption>限制每次从 Emby 获取的媒体数量</q-item-label>
         </q-item-section>
         <q-item-section>
           <q-input
             v-model.number="setupState.form.emby.limitCount"
-            standout
+            outlined
             dense
             :rules="[(val) => !!val || '不能为空', (val) => /^\d+$/.test(val) || '必须是整数']"
           />
@@ -40,19 +47,20 @@
       </q-item>
       <q-item tag="label" v-ripple>
         <q-item-section>
-          <q-item-label>是否跳过已观看的</q-item-label>
+          <q-item-label>跳过已观看内容</q-item-label>
         </q-item-section>
         <q-item-section>
           <q-toggle v-model="setupState.form.emby.skipWatched" />
         </q-item-section>
       </q-item>
 
-      <q-item :class="{ disabled: setupState.form.emby.autoOrManual }" tag="label" v-ripple>
+      <q-item tag="label" v-ripple>
         <q-item-section>
-          <q-item-label>自动匹配IMDB ID</q-item-label>
+          <q-item-label>自动匹配 IMDb ID</q-item-label>
+          <q-item-label caption>推荐开启，用于提高精确字幕源的命中率</q-item-label>
         </q-item-section>
         <q-item-section>
-          <q-toggle v-model="setupState.form.emby.autoOrManual" :disable="setupState.form.emby.autoOrManual" />
+          <q-toggle v-model="setupState.form.emby.autoOrManual" />
         </q-item-section>
       </q-item>
     </q-list>
@@ -61,4 +69,13 @@
 
 <script setup>
 import { setupState } from 'pages/setup/use-setup';
+
+const validateServerUrl = (value) => {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) || '仅支持 HTTP(S) 地址';
+  } catch (_) {
+    return '请输入完整 URL';
+  }
+};
 </script>

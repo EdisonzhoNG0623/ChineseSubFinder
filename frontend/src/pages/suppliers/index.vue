@@ -1,13 +1,13 @@
 <template>
   <q-page class="app-page">
-    <section class="page-heading row items-end q-col-gutter-md">
-      <div class="col">
+    <section class="page-heading">
+      <div>
         <div class="eyebrow">SUPPLIER OPERATIONS</div>
         <h1>字幕源运行状态</h1>
         <p>连接性、命中情况和当日配额集中展示；检测在后台运行，不会阻塞页面。</p>
       </div>
-      <div class="row q-gutter-sm">
-        <q-btn flat icon="settings" label="配置字幕源" to="/settings?tab=advanced" />
+      <div class="page-heading__actions row q-gutter-sm">
+        <q-btn flat icon="settings" label="配置字幕源" to="/settings?tab=subSource" />
         <q-btn
           unelevated
           color="primary"
@@ -19,8 +19,17 @@
       </div>
     </section>
 
-    <div class="row q-col-gutter-md q-mb-lg">
-      <div v-for="item in headline" :key="item.label" class="col-6 col-md-3">
+    <div v-if="loadError" class="status-strip status-strip--danger q-mb-lg" role="alert">
+      <q-icon name="cloud_off" />
+      <div class="col">
+        <strong>字幕源状态加载失败</strong>
+        <div class="text-caption">{{ loadError }}</div>
+      </div>
+      <q-btn flat dense label="重试" @click="load(false)" />
+    </div>
+
+    <div class="metric-grid q-mb-lg">
+      <div v-for="item in headline" :key="item.label">
         <q-card flat bordered class="metric-card">
           <q-card-section>
             <div class="metric-label">{{ item.label }}</div>
@@ -40,6 +49,15 @@
         :pagination="{ rowsPerPage: 0 }"
         hide-bottom
       >
+        <template #no-data>
+          <div class="full-width empty-state">
+            <div>
+              <q-icon name="hub" size="38px" class="empty-state__icon" />
+              <div class="empty-state__title">暂无字幕源状态</div>
+              <div>点击“立即检测”获取连通性与延迟。</div>
+            </div>
+          </div>
+        </template>
         <template #body-cell-status="{ row }">
           <q-td>
             <q-badge :color="healthMeta(row.health).color" outline>{{ healthMeta(row.health).label }}</q-badge>
@@ -92,6 +110,7 @@ import { SystemMessage } from 'src/utils/message';
 const rows = ref([]);
 const loading = ref(false);
 const checking = ref(false);
+const loadError = ref('');
 const columns = [
   { name: 'name', label: '字幕源', field: 'display_name', align: 'left' },
   { name: 'status', label: '状态', field: 'health', align: 'left' },
@@ -136,9 +155,10 @@ const load = async (silent = false) => {
   const [res, err] = await SupplierApi.getDiagnostics();
   loading.value = false;
   if (err) {
-    if (!silent) SystemMessage.error(err.message);
+    loadError.value = err.message || '无法读取字幕源状态';
     return;
   }
+  loadError.value = '';
   rows.value = res.data || [];
   checking.value = !!res.is_checking;
 };

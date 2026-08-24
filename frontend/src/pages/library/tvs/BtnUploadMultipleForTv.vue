@@ -21,8 +21,7 @@
 
   <q-dialog v-model="show" @before-show="handleBeforeShow">
     <q-card
-      class="relative-position"
-      style="min-width: 900px"
+      class="relative-position wide-dialog"
       @dragover="handleDragenter"
       @drop="handleDrop"
       @dragleave="handleDragleave"
@@ -30,18 +29,18 @@
       <div class="drag-mask row items-center justify-center text-white text-h5" v-if="isDragover">
         放置字幕文件到此处
       </div>
-      <q-card-section>
-        <div class="text-body1">批量上传</div>
+      <q-card-section class="dialog-header row items-center">
+        <div>
+          <div class="eyebrow">BATCH UPLOAD</div>
+          <div class="text-h6">上传整季字幕</div>
+        </div>
+        <q-space /><q-btn v-close-popup flat round dense icon="close" aria-label="关闭" />
       </q-card-section>
 
       <q-separator />
 
-      <q-card-section style="min-height: 500px">
-        <div
-          v-if="uploadFiles.length === 0"
-          class="upload-area column justify-center items-center q-gutter-sm"
-          style="height: 500px"
-        >
+      <q-card-section class="upload-dialog-body">
+        <div v-if="uploadFiles.length === 0" class="upload-area column justify-center items-center q-gutter-sm">
           <div>拖拽文件上传</div>
           <div>或者</div>
           <q-btn color="primary" label="选择文件" dense flat @click="() => qFile.$el.click()" />
@@ -58,7 +57,7 @@
                   :options="items"
                   dense
                   filled
-                  style="width: 200px"
+                  class="episode-select"
                   label="选择对应的集数"
                   clearable
                 >
@@ -85,7 +84,15 @@
 
       <q-card-actions align="right">
         <q-btn class="q-px-md" v-close-popup flat color="primary" label="关闭" />
-        <q-btn class="q-px-md" type="submit" color="primary" :loading="submitting" @click="upload" label="上传">
+        <q-btn
+          class="q-px-md"
+          unelevated
+          type="submit"
+          color="primary"
+          :loading="submitting"
+          @click="upload"
+          label="开始上传"
+        >
           <template v-slot:loading>
             <q-spinner-facebook />
           </template>

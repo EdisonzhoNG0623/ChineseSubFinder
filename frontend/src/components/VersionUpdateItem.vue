@@ -1,12 +1,16 @@
 <template>
   <span v-if="hasNewVersion" @click="visible = true">
     <slot v-if="$slots.default"></slot>
-    <q-badge v-else class="cursor-pointer" label="new" title="有新的版本更新" />
+    <q-badge v-else class="cursor-pointer" label="有更新" title="有新的版本更新" />
   </span>
   <q-dialog v-if="latestVersion" v-model="visible">
-    <q-card class="column" style="width: 600px; min-height: 400px">
-      <q-card-section>
-        <div class="text-h5">{{ latestVersion.tag_name }}</div>
+    <q-card class="column update-dialog">
+      <q-card-section class="dialog-header row items-center">
+        <div>
+          <div class="eyebrow">VERSION UPDATE</div>
+          <div class="text-h5">{{ latestVersion.tag_name }}</div>
+        </div>
+        <q-space /><q-btn v-close-popup flat round dense icon="close" aria-label="关闭" />
       </q-card-section>
 
       <q-tabs
@@ -29,29 +33,25 @@
           <markdown :source="latestVersion.body" />
         </q-tab-panel>
         <q-tab-panel name="update">
-          <section>
-            <div class="text-h6">Windows</div>
+          <section class="q-mb-lg">
+            <div class="text-h6">Docker / Unraid</div>
+            <p>更新镜像后重新创建容器，保留当前配置目录映射。自定义构建版本请以维护者发布说明为准。</p>
             <div>
-              下载最新版本替换，
-              <a :href="latestVersion.html_url" target="_blank"> 下载地址 </a>
-            </div>
-          </section>
-
-          <section>
-            <div class="text-h6">Docker</div>
-            <div>
-              参考教程
+              查看
               <!-- eslint-disable-next-line max-len -->
               <a
                 href="https://github.com/ChineseSubFinder/ChineseSubFinder/blob/master/docker/readme.md"
                 target="_blank"
+                rel="noopener noreferrer"
               >
-                Docker部署教程
+                Docker 部署说明
               </a>
             </div>
-            <div class="text-grey">
-              * 新版本发布到Docker发布完成可能需要一小时左右，如果发现Docker拉取的版本没有变化，请耐心等待一段时间
-            </div>
+            <div class="text-caption text-grey-7">镜像发布通常晚于 GitHub Release，请以镜像仓库标签为准。</div>
+          </section>
+          <section>
+            <div class="text-h6">Windows</div>
+            <p>下载对应 Release，在备份配置后替换程序文件。</p>
           </section>
         </q-tab-panel>
       </q-tab-panels>
@@ -59,7 +59,7 @@
       <q-separator />
 
       <q-card-actions align="right">
-        <q-btn color="primary" @click="navigateToReleasePage"> 前往更新 </q-btn>
+        <q-btn unelevated color="primary" icon-right="open_in_new" @click="navigateToReleasePage">查看 Release</q-btn>
       </q-card-actions>
     </q-card>
   </q-dialog>
@@ -75,9 +75,20 @@ const latestVersion = ref(LocalStorage.getItem('latestVersion') ?? null);
 const visible = ref(false);
 const tab = ref('log');
 
+const parseVersion = (value) => {
+  const match = String(value || '').match(/(\d+)\.(\d+)(?:\.(\d+))?/);
+  return match ? match.slice(1).map((part) => Number(part || 0)) : null;
+};
+
 const hasNewVersion = computed(() => {
-  const v = systemState.systemInfo?.version.replace(/\s+(L|l)ite$/, '');
-  return latestVersion.value?.tag_name && v && latestVersion.value.tag_name !== v;
+  const current = parseVersion(systemState.systemInfo?.version);
+  const latest = parseVersion(latestVersion.value?.tag_name);
+  if (!current || !latest) return false;
+  for (let index = 0; index < Math.max(current.length, latest.length); index += 1) {
+    const difference = (latest[index] || 0) - (current[index] || 0);
+    if (difference !== 0) return difference > 0;
+  }
+  return false;
 });
 
 const getLatestVersion = async () => {
@@ -99,7 +110,7 @@ const getLatestVersion = async () => {
 };
 
 const navigateToReleasePage = () => {
-  window.open(latestVersion.value.html_url);
+  window.open(latestVersion.value.html_url, '_blank', 'noopener,noreferrer');
   visible.value = false;
 };
 
@@ -109,5 +120,9 @@ onMounted(getLatestVersion);
 <style lang="scss" scoped>
 a {
   color: $primary;
+}
+.update-dialog {
+  width: 680px;
+  min-height: min(540px, 80dvh);
 }
 </style>

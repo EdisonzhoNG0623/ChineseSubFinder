@@ -78,7 +78,7 @@
               ><q-item-section avatar
                 ><q-badge
                   outline
-                  :color="query.kind === 'ABSOLUTE' ? 'purple' : query.kind === 'SCENE' ? 'orange' : 'primary'"
+                  :color="query.kind === 'ABSOLUTE' ? 'primary' : query.kind === 'SCENE' ? 'warning' : 'blue-grey'"
                   >{{ query.kind }}</q-badge
                 ></q-item-section
               ><q-item-section>{{ query.query }}</q-item-section></q-item

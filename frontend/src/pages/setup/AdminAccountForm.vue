@@ -1,9 +1,9 @@
 <template>
   <q-form ref="form" class="q-gutter-md">
     <q-input
-      filled
+      outlined
       v-model="setupState.form.username"
-      label="输入您的用户名"
+      label="管理员用户名"
       hint="用户名必须在3-16个字符以内，只能包含字母、数字、下划线"
       lazy-rules
       :rules="[
@@ -13,10 +13,10 @@
     />
 
     <q-input
-      filled
+      outlined
       v-model="setupState.form.password"
       type="password"
-      label="输入您的密码"
+      label="管理员密码"
       hint="密码必须在6-30位之间"
       lazy-rules
       :rules="[
@@ -28,10 +28,10 @@
     />
 
     <q-input
-      filled
+      outlined
       v-model="setupState.form.confirmPassword"
       type="password"
-      label="确认密码"
+      label="再次输入密码"
       hint=""
       lazy-rules
       :rules="[(val) => val === setupState.form.password || '两次输入的密码不一致']"

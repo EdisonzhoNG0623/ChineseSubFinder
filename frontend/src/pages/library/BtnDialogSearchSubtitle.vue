@@ -1,14 +1,19 @@
 <template>
   <q-btn color="primary" icon="search" size="sm" flat dense v-bind="$attrs" @click="visible = true" title="字幕搜索" />
 
-  <q-dialog v-model="visible" transition-show="slide-up" transition-hide="slide-down" persistent>
-    <q-card style="min-width: 70vw">
-      <q-card-section>
+  <q-dialog v-model="visible" transition-show="slide-up" transition-hide="slide-down">
+    <q-card class="search-subtitle-dialog">
+      <q-card-section class="dialog-header">
         <div class="row justify-between items-center">
-          <div class="text-h6 text-grey-8">字幕搜索</div>
-          <q-btn icon="close" flat round dense @click="visible = false" />
+          <div>
+            <div class="eyebrow">MANUAL TOOL</div>
+            <div class="text-h6">搜索与下载字幕</div>
+          </div>
+          <q-btn icon="close" flat round dense aria-label="关闭" @click="visible = false" />
         </div>
-        <div class="text-warning">* 下载字幕包是在浏览器端进行处理的，下载过程中请不要关闭页面</div>
+        <div class="status-strip status-strip--warning q-mt-md">
+          <q-icon name="info" /> 字幕包由当前浏览器处理，任务结束前请保持页面打开。
+        </div>
       </q-card-section>
       <q-separator />
 
@@ -20,7 +25,7 @@
           indicator-color="primary"
           align="justify"
           narrow-indicator
-          style="display: inline-block"
+          class="dialog-tabs"
         >
           <q-tab name="csf" label="Subtitle.Best API" />
           <q-tab name="manual" label="手动搜索" />
@@ -44,7 +49,7 @@
           indicator-color="primary"
           align="justify"
           narrow-indicator
-          style="display: inline-block"
+          class="dialog-tabs"
         >
           <q-tab name="csf" label="Subtitle.Best API" />
         </q-tabs>
@@ -52,10 +57,6 @@
         <q-tab-panels v-model="tab" animated keep-alive>
           <q-tab-panel name="csf">
             <search-panel-csf-api-tv-package :episodes="packageEpisodes" />
-          </q-tab-panel>
-
-          <q-tab-panel name="csf-share">
-            <search-panel-csf-api-tv-package :episodes="packageEpisodes" use-user-share-api />
           </q-tab-panel>
         </q-tab-panels>
       </template>

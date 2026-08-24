@@ -1,7 +1,7 @@
 <template>
   <q-page class="app-page">
-    <section class="page-heading row items-end q-col-gutter-md">
-      <div class="col">
+    <section class="page-heading">
+      <div>
         <div class="eyebrow">DOWNLOAD QUEUE</div>
         <h1>下载队列</h1>
         <p>服务端筛选与分页，重试时间和失败原因可直接诊断。</p>
@@ -9,8 +9,17 @@
       <q-btn flat round icon="refresh" :loading="loading" @click="load" title="刷新" />
     </section>
 
-    <div class="row q-col-gutter-md q-mb-md">
-      <div v-for="metric in summaryMetrics" :key="metric.label" class="col-6 col-md-3">
+    <div v-if="loadError" class="status-strip status-strip--danger q-mb-lg" role="alert">
+      <q-icon name="cloud_off" />
+      <div class="col">
+        <strong>队列数据加载失败</strong>
+        <div class="text-caption">{{ loadError }}</div>
+      </div>
+      <q-btn flat dense label="重试" @click="load" />
+    </div>
+
+    <div class="metric-grid q-mb-md">
+      <div v-for="metric in summaryMetrics" :key="metric.label">
         <q-card flat bordered class="metric-card"
           ><q-card-section
             ><div class="metric-label">{{ metric.label }}</div>
@@ -131,7 +140,7 @@
         <template #body-cell-name="{ row }"
           ><q-td class="job-name-cell"
             ><div class="text-weight-medium ellipsis">{{ row.video_name }}</div>
-            <div v-if="row.identity?.is_anime" class="text-caption text-purple">动漫 · {{ identityText(row) }}</div>
+            <div v-if="row.identity?.is_anime" class="text-caption text-primary">动漫 · {{ identityText(row) }}</div>
             <div class="text-caption text-grey-7 ellipsis">{{ row.video_f_path }}</div></q-td
           ></template
         >
@@ -182,6 +191,7 @@ const $q = useQuasar();
 const rows = ref([]);
 const selected = ref([]);
 const loading = ref(false);
+const loadError = ref('');
 const summary = reactive({ total: 0, by_status: {}, by_error_category: {}, retry_scheduled: 0, ready_now: 0 });
 const filters = reactive({ search: '', status: null, videoType: null, errorCategory: null, priority: null });
 const pagination = ref({ page: 1, rowsPerPage: 20, rowsNumber: 0, sortBy: 'updatedAt', descending: true });
@@ -240,9 +250,10 @@ const load = async () => {
   if (sequence !== requestSequence) return;
   loading.value = false;
   if (err) {
-    SystemMessage.error(err.message);
+    loadError.value = err.message || '无法读取下载队列';
     return;
   }
+  loadError.value = '';
   rows.value = res.data || [];
   Object.assign(summary, res.summary || {});
   pagination.value.rowsNumber = res.pagination?.total_items || 0;

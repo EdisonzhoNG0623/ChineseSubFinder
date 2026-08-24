@@ -1,15 +1,31 @@
 <template>
-  <login-bg-area />
-  <header class="text-h4 q-pa-md text-center text-bold text-white">欢迎使用 ChineseSubFinder！</header>
-  <q-separator />
-  <main class="flex justify-center items-center q-pa-md q-mt-lg">
-    <div style="width: 800px">
-      <q-stepper v-model="step" ref="stepper" animated vertical flat>
+  <q-page class="setup-page">
+    <header class="setup-header">
+      <div class="auth-brand"><img src="icons/logo.png" alt="" /><span>ChineseSubFinder</span></div>
+      <div class="setup-header__copy">
+        <div class="eyebrow">FIRST RUN SETUP</div>
+        <h1>完成首次配置</h1>
+        <p>依次创建管理员、连接媒体目录并选择媒体服务器。稍后仍可在设置中心修改。</p>
+      </div>
+    </header>
+    <section v-if="setupLoading" class="setup-card q-pa-xl" aria-busy="true">
+      <q-skeleton type="text" width="32%" /><q-skeleton type="rect" height="320px" class="q-mt-lg" />
+    </section>
+    <section v-else-if="setupError" class="setup-card empty-state">
+      <div>
+        <q-icon name="cloud_off" size="42px" class="empty-state__icon" />
+        <div class="empty-state__title">初始化配置加载失败</div>
+        <div class="q-mb-md">{{ setupError }}</div>
+        <q-btn outline color="primary" label="重试" @click="reloadSetup" />
+      </div>
+    </section>
+    <section v-else class="setup-card">
+      <q-stepper v-model="step" ref="stepper" animated vertical flat color="primary">
         <q-step name="1" prefix="1" :done="step > '1'" title="创建管理账号">
           <admin-account-form ref="adminAccountForm" />
         </q-step>
 
-        <q-step name="2" prefix="2" :done="step > '2'" title="电影、连续剧目录设置">
+        <q-step name="2" prefix="2" :done="step > '2'" title="配置媒体目录">
           <scan-folder-form ref="scanFolderForm" />
         </q-step>
 
@@ -19,7 +35,7 @@
           </q-form>
         </q-step>
 
-        <q-step v-if="setupState.form.mediaServer === 'emby'" name="31" prefix="4" title="Emby设置">
+        <q-step v-if="setupState.form.mediaServer === 'emby'" name="31" prefix="4" title="配置 Emby">
           <q-form class="q-gutter-md">
             <emby-setup-form ref="mediaServerSettingForm" />
           </q-form>
@@ -27,21 +43,29 @@
 
         <template v-slot:navigation>
           <q-stepper-navigation>
-            <q-btn v-if="showSubmitButton" @click="submit" :loading="submitting" color="primary" label="完成" />
-            <q-btn v-else @click="nextStep" color="primary" label="下一步" />
+            <q-btn
+              v-if="showSubmitButton"
+              unelevated
+              @click="submit"
+              :loading="submitting"
+              color="primary"
+              label="完成配置"
+            />
+            <q-btn v-else unelevated @click="nextStep" color="primary" label="继续" icon-right="arrow_forward" />
             <q-btn
               v-if="step > '1'"
               flat
-              color="deep-orange"
+              color="grey-8"
               @click="$refs.stepper.previous()"
-              label="上一步"
+              label="返回"
               class="q-ml-sm"
             />
           </q-stepper-navigation>
         </template>
       </q-stepper>
-    </div>
-  </main>
+    </section>
+    <footer class="setup-footer">所有配置都保存在当前实例中。</footer>
+  </q-page>
 </template>
 
 <script setup>
@@ -53,9 +77,8 @@ import AdminAccountForm from 'pages/setup/AdminAccountForm';
 import ScanFolderForm from 'pages/setup/ScanFolderForm';
 import { templateRef } from '@vueuse/core';
 import SelectMediaServerForm from 'pages/setup/SelectMediaServerForm';
-import { setupState, useSetup } from 'pages/setup/use-setup';
+import { reloadSetup, setupError, setupLoading, setupState, useSetup } from 'pages/setup/use-setup';
 import EmbySetupForm from 'pages/setup/EmbySetupForm';
-import LoginBgArea from 'pages/access/login/LoginBgArea';
 import { deepCopy } from 'src/utils/common';
 import { getInfo, isRunningInDocker } from 'src/store/systemState';
 import { SUB_NAME_FORMAT_NORMAL } from 'src/constants/SettingConstants';

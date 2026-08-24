@@ -1,7 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import LibraryApi from 'src/api/LibraryApi';
 import { SystemMessage } from 'src/utils/message';
-import { until } from '@vueuse/core';
 import config from 'src/config';
 import { LocalStorage } from 'quasar';
 import { useSettings } from 'pages/settings/use-settings';
@@ -26,20 +25,29 @@ const tvs = computed(() =>
 );
 export const libraryRefreshStatus = ref(null);
 export const subtitleUploadList = ref([]);
+export const libraryLoading = ref(false);
+export const libraryError = ref('');
 
 export const refreshCacheLoading = computed(() => libraryRefreshStatus.value === 'running');
 
 let getRefreshStatusTimer = null;
+let waitForRefreshTimer = null;
+let resolveRefreshWait = null;
 
 export const getLibraryRefreshStatus = async () => {
-  const [res] = await LibraryApi.getRefreshStatus();
+  const [res, err] = await LibraryApi.getRefreshStatus();
+  if (err || !res) return false;
   libraryRefreshStatus.value = res.status;
+  return true;
 };
 
 export const getLibraryList = async () => {
+  libraryLoading.value = true;
+  libraryError.value = '';
   const [res, err] = await LibraryApi.getList();
+  libraryLoading.value = false;
   if (err !== null) {
-    SystemMessage.error(err.message);
+    libraryError.value = err.message || '媒体库加载失败';
   } else {
     originMovies.value = res.movie_infos_v2;
     originTvs.value = res.season_infos_v2;
@@ -48,14 +56,28 @@ export const getLibraryList = async () => {
 
 export const checkLibraryRefreshStatus = async () => {
   libraryRefreshStatus.value = null;
-  await getLibraryRefreshStatus();
+  const available = await getLibraryRefreshStatus();
+  if (!available) return false;
+  if (libraryRefreshStatus.value !== 'running') {
+    await getLibraryList();
+    return true;
+  }
   getRefreshStatusTimer = setInterval(() => {
     getLibraryRefreshStatus();
   }, 1000);
-  await until(libraryRefreshStatus).toBe('stopped');
-  clearInterval(getRefreshStatusTimer);
-  getRefreshStatusTimer = null;
-  await getLibraryList();
+  return new Promise((resolve) => {
+    resolveRefreshWait = resolve;
+    waitForRefreshTimer = setInterval(async () => {
+      if (libraryRefreshStatus.value !== 'stopped') return;
+      clearInterval(waitForRefreshTimer);
+      waitForRefreshTimer = null;
+      clearInterval(getRefreshStatusTimer);
+      getRefreshStatusTimer = null;
+      await getLibraryList();
+      resolveRefreshWait?.(true);
+      resolveRefreshWait = null;
+    }, 250);
+  });
 };
 
 export const refreshLibrary = async () => {
@@ -63,13 +85,14 @@ export const refreshLibrary = async () => {
   if (err !== null) {
     SystemMessage.error(err.message);
   } else {
-    await checkLibraryRefreshStatus();
-    SystemMessage.success('更新缓存成功');
+    const completed = await checkLibraryRefreshStatus();
+    if (completed) SystemMessage.success('媒体缓存刷新已完成');
   }
 };
 
 export const getSubtitleUploadList = async () => {
-  const [res] = await LibraryApi.getSubTitleQueueList();
+  const [res, err] = await LibraryApi.getSubTitleQueueList();
+  if (err || !res) return;
   subtitleUploadList.value = res.jobs;
 };
 
@@ -82,14 +105,16 @@ export const useLibrary = () => {
 
   onMounted(() => {
     getLibraryList();
-    getLibraryRefreshStatus();
     getSubtitleUploadList();
     checkLibraryRefreshStatus();
   });
 
   onBeforeUnmount(() => {
     clearInterval(getRefreshStatusTimer);
+    clearInterval(waitForRefreshTimer);
     clearInterval(getSubtitleUploadListTimer);
+    resolveRefreshWait?.(false);
+    resolveRefreshWait = null;
   });
 
   return {
@@ -97,6 +122,9 @@ export const useLibrary = () => {
     tvs,
     refreshLibrary,
     refreshCacheLoading,
+    libraryLoading,
+    libraryError,
+    reloadLibrary: getLibraryList,
   };
 };
 

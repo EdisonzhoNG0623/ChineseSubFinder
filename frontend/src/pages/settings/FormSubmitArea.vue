@@ -1,7 +1,8 @@
 <template>
-  <div class="q-pa-md q-gutter-md">
-    <q-btn :disable="isJobRunning" label="保存" color="primary" type="submit" :loading="submitting"></q-btn>
-    <q-btn :disable="isJobRunning" label="重置" @click="resetForm"></q-btn>
+  <div class="settings-actions">
+    <q-btn :disable="isJobRunning" unelevated label="保存更改" color="primary" type="submit" :loading="submitting" />
+    <q-btn :disable="isJobRunning" flat label="撤销未保存更改" @click="resetForm" />
+    <q-space />
     <export-setting-btn-dialog />
   </div>
 </template>

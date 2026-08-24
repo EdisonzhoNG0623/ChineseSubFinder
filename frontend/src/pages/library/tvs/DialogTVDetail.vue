@@ -4,9 +4,13 @@
   </span>
 
   <q-dialog v-model="visible">
-    <q-card style="width: 900px; max-width: 900px">
-      <q-card-section>
-        <div class="text-h6">{{ data.name }} 剧集列表</div>
+    <q-card class="wide-dialog">
+      <q-card-section class="dialog-header row items-center">
+        <div>
+          <div class="eyebrow">EPISODE SUBTITLES</div>
+          <div class="text-h6">{{ data.name }}</div>
+        </div>
+        <q-space /><q-btn v-close-popup flat round dense icon="close" aria-label="关闭" />
       </q-card-section>
 
       <q-tabs v-model="tab" dense active-color="primary" indicator-color="primary" align="justify" narrow-indicator>
@@ -21,8 +25,8 @@
 
       <q-separator />
 
-      <q-card-section style="max-height: 40vh; overflow: auto">
-        <div class="row items-center q-ml-md q-py-none">
+      <q-card-section class="dialog-scroll-area">
+        <div class="episode-toolbar row items-center q-py-none">
           <q-checkbox
             :model-value="selectAllValue"
             indeterminate-value="maybe"
@@ -108,7 +112,7 @@
                           <q-item-section side>{{ index + 1 }}.</q-item-section>
 
                           <q-item-section class="overflow-hidden ellipsis" :title="item1.split(/\/|\\/).pop()">
-                            <a class="text-primary" :href="getUrl(item1)" target="_blank">{{
+                            <a class="text-primary" :href="getUrl(item1)" target="_blank" rel="noopener noreferrer">{{
                               item1.split(/\/|\\/).pop()
                             }}</a>
                           </q-item-section>
@@ -121,7 +125,7 @@
                               icon="construction"
                               :title="`字幕时间轴校准${
                                 !formModel.advanced_settings.fix_time_line
-                                  ? '（此功能需要在进阶设置里开启自动校正字幕时间轴，检测到你当前尚未开启此选项）'
+                                  ? '（请先在“匹配与队列”中开启自动校正字幕时间轴）'
                                   : ''
                               }`"
                               @click="doFixSubtitleTimeline(item1)"
@@ -192,7 +196,7 @@ const $q = useQuasar();
 const categoryVideos = computed(() => {
   // [{season: episodes: []}]
   const result = [];
-  props.data?.one_video_info.forEach((item) => {
+  (props.data?.one_video_info || []).forEach((item) => {
     const { season } = item;
     const index = result.findIndex((e) => e.season === season);
     if (index === -1) {
@@ -240,7 +244,7 @@ const getUrl = (path) => config.BACKEND_URL + path.split(/\/|\\/).join('/');
 const downloadSubtitle = async (items) => {
   const downloadList = items instanceof Array ? items : [items];
   $q.dialog({
-    title: `添加 ${downloadList.length}个 视频任务到下载队列`,
+    title: `添加 ${downloadList.length} 个视频任务到下载队列`,
     message: '选择下载任务的类型：',
     options: {
       model: 3,

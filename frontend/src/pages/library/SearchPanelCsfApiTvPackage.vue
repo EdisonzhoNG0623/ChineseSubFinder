@@ -1,5 +1,5 @@
 <template>
-  <div :key="currentVideoFilePath" style="min-height: 300px">
+  <div :key="currentVideoFilePath" class="search-panel">
     <subtitle-best-api-limit-banner v-if="!hideLimit" />
 
     <q-splitter v-if="packages.length" class="q-mt-md overflow-hidden" v-model="splitterModel" unit="px">
@@ -73,20 +73,24 @@
     </q-splitter>
     <div v-else-if="!loading" class="text-grey">
       <div>
-        <span>ImdbId: {{ imdbId || '-' }}</span>
-        <span v-if="imdbId && !isImdbId(imdbId)" class="q-ml-md text-negative">这是个无效的ImdbId</span>
+        <span>IMDb ID：{{ imdbId || '未识别' }}</span>
+        <span v-if="imdbId && !isImdbId(imdbId)" class="q-ml-md text-negative">IMDb ID 格式无效</span>
       </div>
       <template v-if="tmdbErrorMsg">
         <div class="text-negative">{{ tmdbErrorMsg }}</div>
         <div><q-btn flat label="重试" color="primary" dense @click="searchPackages" /></div>
       </template>
       <template v-else-if="subtitleBestApiErrorMsg">
-        <div class="text-negative">获取字幕列表失败，错误信息：{{ subtitleBestApiErrorMsg }}</div>
+        <div class="text-negative">字幕包列表获取失败：{{ subtitleBestApiErrorMsg }}</div>
         <div><q-btn flat label="重试" color="primary" dense @click="searchPackages" /></div>
       </template>
       <template v-else>
-        <div>未搜索到数据，<q-btn flat label="重试" color="primary" dense @click="searchPackages" /></div>
-        <div>如果报错信息提示没有 ApiKey，请到<b>配置中心-字幕源设置</b>，填写SubtitleBest的ApiKey</div>
+        <div>没有找到匹配字幕包。<q-btn flat label="重试" color="primary" dense @click="searchPackages" /></div>
+        <div>
+          若提示缺少 API Key，请前往<router-link class="text-primary" to="/settings?tab=subSource"
+            >字幕源与凭据</router-link
+          >配置 SubtitleBest。
+        </div>
       </template>
     </div>
     <q-inner-loading :showing="loading || isDownloadingAll">
@@ -113,7 +117,6 @@ import { settingsState } from 'src/store/settingsState';
 import SubtitleBestApiLimitBanner from 'components/SubtitleBestApiLimitBanner.vue';
 import { useApiLimit } from 'src/composables/use-api-limit';
 import { isImdbId } from 'src/utils/common';
-import CsfSubtitlesShareApi from 'src/api/CsfSubtitlesShareApi';
 
 const props = defineProps({
   episodes: Array,
@@ -124,11 +127,6 @@ const props = defineProps({
   },
   // 隐藏额度
   hideLimit: {
-    type: Boolean,
-    default: false,
-  },
-  // 使用用户共享的字幕API替换默认API
-  useUserShareApi: {
     type: Boolean,
     default: false,
   },
@@ -155,8 +153,6 @@ const csfSearchResult = ref(null);
 const selectedSubBlob = ref(null);
 const selectedItem = ref(null);
 const imdbId = ref(null);
-
-const subtitleApi = computed(() => (props.useUserShareApi ? CsfSubtitlesShareApi : CsfSubtitlesApi));
 
 const currentVideoFilePath = computed(() => props.episodes[0]?.video_f_path);
 const currentSeason = computed(() => props.episodes[0]?.season);
@@ -196,18 +192,16 @@ const setLock = async (paths) => {
 const searchPackages = async () => {
   loading.value = true;
   subtitleBestApiErrorMsg.value = '';
-  loadingMsg.value = '正在从TMDB获取视频详细信息...';
+  loadingMsg.value = '正在从 TMDB 获取媒体信息…';
   const [d, e] = await LibraryApi.getImdbId({
     is_movie: false,
     video_f_path: currentVideoFilePath.value,
   });
   if (e) {
     if (settingsState.settings.advanced_settings.tmdb_api_settings.enable) {
-      tmdbErrorMsg.value =
-        '从 TMDB 获取数据失败，检测到你当前正在使用自己的 TMDB ApiKey ，请检查进阶设置-TMDB API中设置的ApiKey是否有效。';
+      tmdbErrorMsg.value = 'TMDB 查询失败。当前使用自定义 API Key，请检查“匹配与队列”中的 TMDB 配置。';
     } else {
-      tmdbErrorMsg.value =
-        '从 TMDB 获取数据失败，检测到你正在使用公共查询接口，可能是使用人数过多导致查询失败，可以尝试在进阶设置里启用 TMDB API，填写自己的 ApiKey。';
+      tmdbErrorMsg.value = 'TMDB 公共查询暂时不可用，可稍后重试或在“匹配与队列”中配置自己的 API Key。';
     }
     loading.value = false;
     loadingMsg.value = '';
@@ -215,7 +209,7 @@ const searchPackages = async () => {
     return;
   }
   tmdbErrorMsg.value = '';
-  loadingMsg.value = '正在从 SubtitleBest 获取字幕包列表...';
+  loadingMsg.value = '正在从 SubtitleBest 获取字幕包列表…';
   imdbId.value = d?.ImdbId;
 
   if (!isImdbId(imdbId.value)) {
@@ -224,7 +218,7 @@ const searchPackages = async () => {
     return;
   }
 
-  const [data, err] = await subtitleApi.value.searchTvSeasonPackage({
+  const [data, err] = await CsfSubtitlesApi.searchTvSeasonPackage({
     imdb_id: imdbId.value,
     season: currentSeason.value,
   });
@@ -241,8 +235,8 @@ const searchPackages = async () => {
 
 const searchPackageSubtitles = async (packageId) => {
   loading.value = true;
-  loadingMsg.value = '正在获取字幕列表...';
-  const [data, err] = await subtitleApi.value.searchTvSeasonPackageId({
+  loadingMsg.value = '正在获取字幕列表…';
+  const [data, err] = await CsfSubtitlesApi.searchTvSeasonPackageId({
     imdb_id: imdbId.value,
     season_package_id: packageId,
   });
@@ -272,11 +266,11 @@ const fetchSubtitleBlob = async (item) => {
   }
   selectedSubBlob.value = null;
   loading.value = true;
-  loadingMsg.value = '正在获取下载地址...';
+  loadingMsg.value = '正在获取下载地址…';
   await waitRequestReady();
 
-  loadingMsg.value = '正在下载字幕...';
-  const [data, err] = await subtitleApi.value.getDownloadUrl({
+  loadingMsg.value = '正在下载字幕…';
+  const [data, err] = await CsfSubtitlesApi.getDownloadUrl({
     ...item,
     imdb_id: imdbId.value,
   });

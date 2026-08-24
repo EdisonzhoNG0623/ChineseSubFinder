@@ -1,10 +1,10 @@
 <template>
-  <div>
-    <q-list dense style="max-width: 600px">
+  <div class="settings-panel">
+    <q-list dense class="settings-form-list">
       <q-item tag="label" v-ripple>
         <q-item-section>
-          <q-item-label>是否使用代理</q-item-label>
-          <q-item-label caption>支持HTTP代理</q-item-label>
+          <q-item-label>使用出站代理</q-item-label>
+          <q-item-label caption>供 TMDB、字幕站和浏览器任务访问外部网络，支持 HTTP 与 SOCKS5</q-item-label>
         </q-item-section>
         <q-item-section avatar top>
           <q-toggle v-model="form.proxy_settings.use_proxy" />
@@ -13,7 +13,7 @@
 
       <q-item v-if="form.proxy_settings.use_proxy" class="q-mt-md" dense>
         <q-item-section>
-          <div class="row q-gutter-sm no-wrap">
+          <div class="row q-gutter-sm">
             <q-select
               v-model="form.proxy_settings.use_which_proxy_protocol"
               :options="Object.keys(PROXY_TYPE_NAME_MAP).map((e) => ({ label: PROXY_TYPE_NAME_MAP[e], value: e }))"
@@ -41,6 +41,8 @@
             <q-input
               :disable="!form.proxy_settings.need_pwd"
               v-model="form.proxy_settings.input_proxy_password"
+              type="password"
+              autocomplete="new-password"
               standout
               dense
               label="密码"
@@ -64,6 +66,7 @@
       <q-item tag="label" v-ripple>
         <q-item-section>
           <q-item-label>调试模式</q-item-label>
+          <q-item-label caption>输出更详细的诊断日志；日常运行建议关闭</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <q-toggle v-model="form.debug_mode" />
@@ -75,6 +78,7 @@
       <q-item tag="label" v-ripple>
         <q-item-section>
           <q-item-label>保存整季的缓存字幕</q-item-label>
+          <q-item-label caption>保留季包解压后的临时字幕，便于排查匹配问题但会占用更多空间</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <q-toggle v-model="form.save_full_season_tmp_subtitles" />
@@ -116,7 +120,9 @@
               </q-item-label>
             </q-item-section>
           </q-item>
-          <div class="text-negative">* 修改此选项后需要重启容器，启动阶段会对所有字幕的做格式调整，耗时可能较长</div>
+          <div class="status-strip status-strip--warning q-mt-md">
+            修改命名格式后需要重启容器；启动阶段会整理已有字幕，媒体库较大时可能耗时较长。
+          </div>
         </q-item-section>
       </q-item>
 
@@ -125,6 +131,7 @@
       <q-item tag="label" v-ripple>
         <q-item-section>
           <q-item-label>跳过中文电影</q-item-label>
+          <q-item-label caption>识别为中文原声的电影不再自动下载字幕</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <q-toggle v-model="form.scan_logic.skip_chinese_movie" />
@@ -134,6 +141,7 @@
       <q-item tag="label" v-ripple>
         <q-item-section>
           <q-item-label>跳过中文连续剧</q-item-label>
+          <q-item-label caption>识别为中文原声的连续剧不再自动下载字幕</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <q-toggle v-model="form.scan_logic.skip_chinese_series" />
@@ -143,39 +151,10 @@
       <q-item v-if="SUB_NAME_FORMAT_EMBY === form.sub_name_formatter" tag="label" v-ripple>
         <q-item-section>
           <q-item-label>保存多字幕</q-item-label>
-          <q-item-label caption>每个视频下面保存每个网站找到的最佳字幕，需要选择Emby格式</q-item-label>
+          <q-item-label caption>保留每个字幕源的最佳结果；仅适用于 Emby 命名格式</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <q-toggle v-model="form.save_multi_sub" />
-        </q-item-section>
-      </q-item>
-
-      <q-separator spaced inset></q-separator>
-
-      <q-item>
-        <q-item-section>
-          <q-item-label class="q-mb-sm row items-center">
-            <span>字幕源设置</span><q-space /><q-btn flat dense color="primary" label="查看运行状态" to="/suppliers" />
-          </q-item-label>
-          <q-banner rounded class="bg-orange-1 text-orange-10 q-mb-sm">
-            A4K 公共域名已停止服务，保留该项仅供配置自建兼容镜像；请勿把旧公共域名视为可用地址。
-          </q-banner>
-          <q-item v-for="item in form.suppliers_settings" :key="item" clickable>
-            <q-item-section avatar class="text-bold" style="width: 120px">
-              {{ item.name }}
-            </q-item-section>
-            <q-item-section class="text-grey-8">
-              <q-item-label :lines="1">
-                {{ item.root_url }}
-              </q-item-label>
-              <q-item-label v-if="item.name !== 'csf'" style="font-size: 90%">
-                每日下载次数限制：{{ item.daily_download_limit < 0 ? '不限' : item.daily_download_limit }}
-              </q-item-label>
-            </q-item-section>
-            <q-item-section side>
-              <edit-sub-source-btn-dialog :data="item" @update="(data) => handleSubSourceUpdate(item, data)" />
-            </q-item-section>
-          </q-item>
         </q-item-section>
       </q-item>
 
@@ -183,7 +162,7 @@
 
       <q-item>
         <q-item-section>
-          <q-item-label class="q-mb-sm">队列设置</q-item-label>
+          <q-item-label class="section-title q-mb-sm">队列与重试</q-item-label>
           <q-input
             class="col"
             v-model.number="form.task_queue.max_retry_times"
@@ -196,7 +175,7 @@
           <q-input
             class="col"
             v-model.number="form.task_queue.one_job_time_out"
-            label="任务的超时时间"
+            label="单个任务超时"
             standout
             dense
             suffix="秒"
@@ -205,7 +184,7 @@
           <q-input
             class="col"
             v-model.number="form.task_queue.interval"
-            label="下载任务之间的间隔时间"
+            label="任务间隔"
             shadow-text="防止频率太高触发防爬检测"
             standout
             dense
@@ -215,8 +194,8 @@
           <q-input
             class="col"
             v-model.number="form.task_queue.expiration_time"
-            label="下载时效（天）"
-            shadow-text="视频创建时间在此时间内，才下载，否则标记为失败"
+            label="媒体下载时效"
+            shadow-text="只为创建时间仍在范围内的媒体自动下载字幕"
             standout
             dense
             suffix="天"
@@ -225,8 +204,8 @@
           <q-input
             class="col"
             v-model.number="form.task_queue.download_sub_during_x_days"
-            label="有内置字幕的视频下载时效"
-            shadow-text="如果创建了 x 天，且有内置的中文字幕，那么也不进行下载了"
+            label="已有内置中文字幕时效"
+            shadow-text="超过该天数且已有内置中文字幕时跳过下载"
             standout
             dense
             suffix="天"
@@ -235,7 +214,7 @@
           <q-input
             class="col"
             v-model.number="form.task_queue.one_sub_download_interval"
-            label="单个任务失败后，重新下载的最小间隔（小时）"
+            label="失败后的最小重试间隔"
             standout
             dense
             suffix="小时"
@@ -244,16 +223,12 @@
           <q-input
             class="col"
             v-model="form.task_queue.check_pulic_ip_target_site"
-            label="检查公网IP的目标网站"
-            shadow-text="目标网站必须直接返回ip字符串，不需要额外解析。多个站点用 ;（英文分号） 分割"
+            label="公网 IP 检测地址"
+            shadow-text="目标需直接返回 IP 文本；多个地址用英文分号分隔"
             standout
             dense
           />
-          <div class="text-warning">
-            * 默认内置几个检查ip的网站，默认站点失效后才需要手动设置。内置站点列表：
-            https://myip.biturl.top/;https://ip4.seeip.org/;https://ipecho.net/plain;https://api-ipv4.ip.sb/ip;
-            https://api.ipify.org/;http://myexternalip.com/raw
-          </div>
+          <div class="text-caption text-grey-7">留空使用内置检测地址；只有内置服务不可用时才需要覆盖。</div>
         </q-item-section>
       </q-item>
 
@@ -261,7 +236,7 @@
 
       <q-item>
         <q-item-section>
-          <q-item-label>下载缓存过期时间设置</q-item-label>
+          <q-item-label>下载缓存保留时间</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <div class="row no-wrap q-gutter-xs">
@@ -286,7 +261,7 @@
       <q-item>
         <q-item-section class="items-start" top>
           <q-item-label>自定义视频扩展名</q-item-label>
-          <q-item-label caption>原生支持mp4、mkv、rmvb、iso</q-item-label>
+          <q-item-label caption>在默认支持的 mp4、mkv、rmvb、iso 之外追加扩展名</q-item-label>
           <template v-for="(item, i) in form.custom_video_exts" :key="i">
             <div class="row items-center q-gutter-x-md" :class="{ 'q-mt-md': i === 0 }">
               <q-input
@@ -326,6 +301,7 @@
       <q-item tag="label" v-ripple>
         <q-item-section>
           <q-item-label>自动校正字幕时间轴</q-item-label>
+          <q-item-label caption>需要额外分析视频；网络盘或低性能存储建议谨慎开启</q-item-label>
         </q-item-section>
         <q-item-section avatar>
           <q-toggle v-model="form.fix_time_line" />
@@ -336,8 +312,8 @@
 
       <q-item tag="label" v-ripple>
         <q-item-section>
-          <q-item-label>启用TMDB API</q-item-label>
-          <!--          <q-item-label caption>支持HTTP代理</q-item-label>-->
+          <q-item-label>使用自定义 TMDB API</q-item-label>
+          <q-item-label caption>用于媒体身份识别；公共查询不稳定时可配置自己的 v3 API Key</q-item-label>
         </q-item-section>
         <q-item-section avatar top>
           <q-toggle v-model="form.tmdb_api_settings.enable" />
@@ -346,17 +322,17 @@
 
       <template v-if="form.tmdb_api_settings.enable">
         <q-item>
-          <div class="text-warning">
-            * 国内访问 TMDB API 可能需要代理。目前程序对接的是 TMDB v3 的接口，请使用 v3 的 ApiKey，否则会出问题。
-          </div>
+          <div class="text-warning">当前只兼容 TMDB v3 API Key；若网络无法直连，请同时配置出站代理或备用地址。</div>
         </q-item>
         <q-item class="q-mt-md" dense>
           <q-item-section>
             <q-input
               v-model="form.tmdb_api_settings.api_key"
+              type="password"
+              autocomplete="new-password"
               standout
               dense
-              label="填写 TMDB ApiKey"
+              label="TMDB v3 API Key"
               :rules="[(val) => (form.tmdb_api_settings.enable && !!val) || '不能为空']"
             />
           </q-item-section>
@@ -390,7 +366,6 @@ import {
 import { formModel } from 'pages/settings/use-settings';
 import { toRefs } from '@vueuse/core';
 import ProxyCheckBtn from 'components/ProxyCheckBtn';
-import EditSubSourceBtnDialog from 'pages/settings/BtnDialogEditSubSource';
 import BtnCheckTmdbApi from 'pages/settings/BtnCheckTmdbApi';
 
 const subNameFormatDescMap = {
@@ -400,9 +375,4 @@ const subNameFormatDescMap = {
 };
 
 const { advanced_settings: form } = toRefs(formModel);
-
-const handleSubSourceUpdate = (item, data) => {
-  formModel.advanced_settings.suppliers_settings[item.name].root_url = data.url;
-  formModel.advanced_settings.suppliers_settings[item.name].daily_download_limit = data.dailyLimit;
-};
 </script>

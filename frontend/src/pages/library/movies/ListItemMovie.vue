@@ -1,87 +1,88 @@
 <template>
-  <q-card flat square>
-    <div class="area-cover q-mb-sm relative-position">
-      <div v-if="!posterInfo?.url" :style="{ width, height: coverHeight }"></div>
-      <q-img
-        v-else
-        :src="getUrl(posterInfo.url)"
-        class="content-width bg-grey-2"
-        no-spinner
-        :style="{ width, height: coverHeight }"
-        fit="cover"
-      />
+  <q-card flat class="media-card">
+    <div class="media-card__poster relative-position">
+      <q-skeleton v-if="!posterLoaded" type="rect" class="fit" />
+      <div v-else-if="!posterInfo.url" class="fit column items-center justify-center text-grey-6">
+        <q-icon name="movie" size="42px" />
+        <span class="text-caption q-mt-sm">暂无封面</span>
+      </div>
+      <q-img v-else :src="getUrl(posterInfo.url)" class="bg-grey-2" no-spinner fit="cover" />
     </div>
-    <div class="content-width text-ellipsis-line-2" :title="data.name">{{ data.name }}</div>
-    <div class="row items-center">
-      <btn-dialog-preview-video
-        v-if="hasSubtitle"
-        size="sm"
-        :subtitle-url-list="detialInfo?.sub_url_list"
-        :path="data.video_f_path"
-      />
-
-      <div>
-        <q-btn
+    <div class="media-card__body">
+      <div class="media-card__title" :title="data.name">{{ data.name }}</div>
+      <div class="media-card__actions">
+        <btn-dialog-preview-video
           v-if="hasSubtitle"
           size="sm"
-          color="black"
+          :subtitle-url-list="detialInfo?.sub_url_list"
+          :path="data.video_f_path"
+        />
+
+        <div>
+          <q-btn
+            v-if="hasSubtitle"
+            size="sm"
+            color="black"
+            round
+            flat
+            dense
+            icon="closed_caption"
+            @click.stop
+            title="已有字幕"
+          >
+            <q-popup-proxy>
+              <q-list dense>
+                <q-item v-for="(item, index) in detialInfo.sub_url_list" :key="item">
+                  <q-item-section side>{{ index + 1 }}.</q-item-section>
+
+                  <q-item-section class="overflow-hidden ellipsis" :title="item.split`(/\/|\\/)`.pop()">
+                    <a class="text-primary" :href="getUrl(item)" target="_blank" rel="noopener noreferrer">{{
+                      item.split(/\/|\\/).pop()
+                    }}</a>
+                  </q-item-section>
+                  <q-item-section side>
+                    <q-btn
+                      color="primary"
+                      round
+                      flat
+                      dense
+                      icon="construction"
+                      :title="`字幕时间轴校准${
+                        !formModel.advanced_settings.fix_time_line
+                          ? '（请先在“匹配与队列”中开启自动校正字幕时间轴）'
+                          : ''
+                      }`"
+                      @click="doFixSubtitleTimeline(item)"
+                      :disable="!formModel.advanced_settings.fix_time_line"
+                    ></q-btn>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+            </q-popup-proxy>
+          </q-btn>
+          <q-btn v-else color="grey" size="sm" round flat dense icon="closed_caption" @click.stop title="没有字幕" />
+        </div>
+
+        <btn-dialog-search-subtitle :path="props.data.video_f_path" is-movie />
+        <q-space />
+
+        <btn-upload-subtitle :path="data.video_f_path" dense size="sm" />
+
+        <q-btn
+          class="btn-download"
+          color="primary"
           round
           flat
           dense
-          icon="closed_caption"
-          @click.stop
-          title="已有字幕"
-        >
-          <q-popup-proxy>
-            <q-list dense>
-              <q-item v-for="(item, index) in detialInfo.sub_url_list" :key="item">
-                <q-item-section side>{{ index + 1 }}.</q-item-section>
+          icon="download_for_offline"
+          title="添加到下载队列"
+          @click="downloadSubtitle"
+          size="sm"
+        ></q-btn>
 
-                <q-item-section class="overflow-hidden ellipsis" :title="item.split`(/\/|\\/)`.pop()">
-                  <a class="text-primary" :href="getUrl(item)" target="_blank">{{ item.split(/\/|\\/).pop() }}</a>
-                </q-item-section>
-                <q-item-section side>
-                  <q-btn
-                    color="primary"
-                    round
-                    flat
-                    dense
-                    icon="construction"
-                    :title="`字幕时间轴校准${
-                      !formModel.advanced_settings.fix_time_line
-                        ? '（此功能需要在进阶设置里开启自动校正字幕时间轴，检测到你当前尚未开启此选项）'
-                        : ''
-                    }`"
-                    @click="doFixSubtitleTimeline(item)"
-                    :disable="!formModel.advanced_settings.fix_time_line"
-                  ></q-btn>
-                </q-item-section>
-              </q-item>
-            </q-list>
-          </q-popup-proxy>
-        </q-btn>
-        <q-btn v-else color="grey" size="sm" round flat dense icon="closed_caption" @click.stop title="没有字幕" />
-      </div>
-
-      <btn-dialog-search-subtitle :path="props.data.video_f_path" is-movie />
-      <q-space />
-
-      <btn-upload-subtitle :path="data.video_f_path" dense size="sm" />
-
-      <q-btn
-        class="btn-download"
-        color="primary"
-        round
-        flat
-        dense
-        icon="download_for_offline"
-        title="添加到下载队列"
-        @click="downloadSubtitle"
-        size="sm"
-      ></q-btn>
-
-      <div>
-        <btn-ignore-video :path="props.data.video_f_path" :video-type="VIDEO_TYPE_MOVIE" size="sm" />
+        <div>
+          <btn-ignore-video :path="props.data.video_f_path" :video-type="VIDEO_TYPE_MOVIE" size="sm" />
+        </div>
       </div>
     </div>
   </q-card>
@@ -102,19 +103,12 @@ import { formModel } from 'pages/settings/use-settings';
 
 const props = defineProps({
   data: Object,
-  width: {
-    type: String,
-    default: '160px',
-  },
-  coverHeight: {
-    type: String,
-    default: '200px',
-  },
 });
 
 const $q = useQuasar();
 
 const posterInfo = ref(null);
+const posterLoaded = ref(false);
 const detialInfo = ref(null);
 
 const getPosterInfo = async () => {
@@ -124,6 +118,7 @@ const getPosterInfo = async () => {
     video_f_path: props.data.video_f_path,
   });
   posterInfo.value = res;
+  posterLoaded.value = true;
 };
 
 const getDetailInfo = async () => {
@@ -184,24 +179,3 @@ onMounted(() => {
   getDetailInfo();
 });
 </script>
-
-<style lang="scss" scoped>
-.content-width {
-  width: v-bind(width);
-}
-.text-ellipsis-line-2 {
-  height: 40px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.area-cover:hover {
-  .btn-download {
-    //display: block;
-    opacity: 1;
-  }
-}
-</style>

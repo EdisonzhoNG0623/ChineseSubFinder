@@ -20,9 +20,9 @@ const check = async () => {
   if (err !== null) {
     SystemMessage.error(err.message);
   } else if (res.message !== 'true') {
-    SystemMessage.error('TMDB API连接异常，请确认ApiKey是否正确，或者启用代理后重试');
+    SystemMessage.error('TMDB API 连接异常，请检查 API Key，或启用代理后重试');
   } else {
-    SystemMessage.success('TMDB服务连接正常');
+    SystemMessage.success('TMDB 服务连接正常');
   }
   loading.value = false;
 };

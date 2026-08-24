@@ -5,7 +5,7 @@
     v-bind="$attrs"
     persistent
   >
-    <q-card :style="{ width: width }">
+    <q-card :style="{ width, maxWidth: 'calc(100vw - 32px)' }">
       <q-card-section>
         <div class="text-h6">{{ title }}</div>
       </q-card-section>

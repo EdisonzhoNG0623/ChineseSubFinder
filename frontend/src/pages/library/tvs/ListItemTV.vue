@@ -1,32 +1,29 @@
 <template>
-  <q-card flat square>
-    <div class="area-cover q-mb-sm relative-position">
-      <div v-if="!posterInfo?.url" style="width: 160px; height: 200px"></div>
-      <q-img
-        v-else
-        :src="getUrl(posterInfo.url)"
-        class="content-width bg-grey-2"
-        no-spinner
-        style="width: 160px; height: 200px"
-        fit="cover"
-      />
+  <q-card flat class="media-card">
+    <div class="media-card__poster relative-position">
+      <q-skeleton v-if="!posterLoaded" type="rect" class="fit" />
+      <div v-else-if="!posterInfo?.url" class="fit column items-center justify-center text-grey-6">
+        <q-icon name="video_library" size="42px" /><span class="text-caption q-mt-sm">暂无封面</span>
+      </div>
+      <q-img v-else :src="getUrl(posterInfo.url)" class="bg-grey-2" no-spinner fit="cover" />
     </div>
-    <div class="content-width text-ellipsis-line-2" :title="data.name">{{ data.name }}</div>
-    <div class="row items-center">
-      <q-space />
-      <div>
-        <dialog-t-v-detail :data="detailInfo">
+    <div class="media-card__body">
+      <div class="media-card__title" :title="data.name">{{ data.name }}</div>
+      <div class="media-card__actions">
+        <q-chip v-if="detailLoading" dense color="grey-2" text-color="grey-7">读取中</q-chip>
+        <dialog-t-v-detail v-else-if="detailInfo" :data="detailInfo">
           <q-btn
             v-if="hasSubtitleVideoCount > 0"
-            color="black"
+            color="primary"
             flat
             dense
             icon="closed_caption"
-            :label="`${hasSubtitleVideoCount}/${detailInfo.one_video_info.length}`"
-            title="已有字幕"
+            :label="`${hasSubtitleVideoCount}/${episodeCount}`"
+            title="查看剧集字幕"
           />
-          <q-btn v-else color="grey" round flat dense icon="closed_caption" title="没有字幕" />
+          <q-btn v-else color="grey-7" flat dense icon="closed_caption_off" label="0" title="暂无字幕" />
         </dialog-t-v-detail>
+        <q-space /><span class="text-caption text-grey-7">{{ episodeCount }} 集</span>
       </div>
     </div>
   </q-card>
@@ -38,74 +35,45 @@ import DialogTVDetail from 'pages/library/tvs/DialogTVDetail';
 import LibraryApi from 'src/api/LibraryApi';
 import { getUrl, subtitleUploadList } from 'pages/library/use-library';
 
-const props = defineProps({
-  data: Object,
-});
-
+const props = defineProps({ data: { type: Object, required: true } });
 const posterInfo = ref(null);
+const posterLoaded = ref(false);
 const detailInfo = ref(null);
+const detailLoading = ref(true);
 
 const getPosterInfo = async () => {
-  const [res] = await LibraryApi.getTvPoster({
+  const [response] = await LibraryApi.getTvPoster({
     name: props.data.name,
     main_root_dir_f_path: props.data.main_root_dir_f_path,
     root_dir_path: props.data.root_dir_path,
   });
-  posterInfo.value = res;
+  posterInfo.value = response;
+  posterLoaded.value = true;
 };
-
 const getDetailInfo = async () => {
-  const [res] = await LibraryApi.getTvDetail({
+  detailLoading.value = true;
+  const [response] = await LibraryApi.getTvDetail({
     name: props.data.name,
     main_root_dir_f_path: props.data.main_root_dir_f_path,
     root_dir_path: props.data.root_dir_path,
   });
-  detailInfo.value = res;
+  detailInfo.value = response;
+  detailLoading.value = false;
 };
-
+const episodeCount = computed(() => detailInfo.value?.one_video_info?.length || 0);
 const hasSubtitleVideoCount = computed(
-  () => detailInfo.value?.one_video_info.filter((e) => e.sub_f_path_list.length > 0).length
+  () => detailInfo.value?.one_video_info?.filter((episode) => episode.sub_f_path_list?.length > 0).length || 0
 );
 
-watch(subtitleUploadList, (val, oldValue) => {
-  // 上传字幕列表当前文件有变化时刷新
-  if (
-    detailInfo.value?.one_video_info.some((e) => oldValue.map((f) => f.video_f_path).includes(e.video_f_path)) &&
-    !detailInfo.value?.one_video_info.some((e) => val.map((f) => f.video_f_path).includes(e.video_f_path))
-  ) {
+watch(subtitleUploadList, (value, oldValue) => {
+  const episodePaths = detailInfo.value?.one_video_info?.map((episode) => episode.video_f_path) || [];
+  const oldPaths = oldValue.map((item) => item.video_f_path);
+  const currentPaths = value.map((item) => item.video_f_path);
+  if (episodePaths.some((path) => oldPaths.includes(path)) && !episodePaths.some((path) => currentPaths.includes(path)))
     getDetailInfo();
-  }
 });
-
 onMounted(() => {
   getPosterInfo();
   getDetailInfo();
 });
 </script>
-
-<style lang="scss" scoped>
-.content-width {
-  width: 160px;
-}
-.text-ellipsis-line-2 {
-  height: 40px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.btn-download {
-  //display: none;
-  opacity: 0;
-  transition: all 0.6s ease;
-}
-
-.area-cover:hover {
-  .btn-download {
-    //display: block;
-    opacity: 1;
-  }
-}
-</style>

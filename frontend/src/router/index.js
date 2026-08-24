@@ -35,13 +35,13 @@ Router.beforeEach(async (to, from, next) => {
   }
   // 未初始化时跳转到初始化页面
   if (systemState.systemInfo?.is_setup === false && to.path !== '/setup') {
-    next('/setup');
+    return next('/setup');
   }
   // 初始化后禁用初始化页面
   if (systemState.systemInfo?.is_setup === true && to.path === '/setup') {
-    next('/');
+    return next('/');
   }
-  next();
+  return next();
 });
 
 export default route((/* { store, ssrContext } */) => Router);

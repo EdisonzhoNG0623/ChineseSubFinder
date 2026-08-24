@@ -1,56 +1,63 @@
 <template>
   <q-layout view="lHh Lpr fff">
     <q-page-container>
-      <q-page class="window-height window-width row justify-center items-center">
-        <login-bg-area />
-        <q-form @submit="submit" class="column q-pa-lg">
-          <div class="row">
-            <q-card square class="shadow-24" style="width: 400px">
-              <q-card-section class="bg-black">
-                <h4 class="text-h5 text-white q-my-md">系统登录</h4>
-              </q-card-section>
-              <q-card-section>
-                <div class="q-px-sm q-pt-xl">
-                  <q-input
-                    square
-                    v-model="form.username"
-                    lazy-rules
-                    :rules="[(val) => !!val || '用户名不能为空']"
-                    label="用户名"
-                  >
-                    <template v-slot:prepend>
-                      <q-icon name="person" />
-                    </template>
-                  </q-input>
-                  <q-input
-                    square
-                    v-model="form.password"
-                    type="password"
-                    lazy-rules
-                    :rules="[(val) => !!val || '密码不能为空']"
-                    label="密码"
-                  >
-                    <template v-slot:prepend>
-                      <q-icon name="lock" />
-                    </template>
-                  </q-input>
-                </div>
-              </q-card-section>
-
-              <q-card-actions class="q-px-lg q-py-md">
-                <q-btn
-                  unelevated
-                  size="lg"
-                  color="primary"
-                  type="submit"
-                  :loading="submitting"
-                  class="full-width text-white"
-                  label="登录"
-                />
-              </q-card-actions>
-            </q-card>
+      <q-page class="auth-page">
+        <section class="auth-story">
+          <div class="auth-brand"><img src="icons/logo.png" alt="" /><span>ChineseSubFinder</span></div>
+          <div>
+            <div class="eyebrow">SUBTITLE OPERATIONS</div>
+            <h1>让字幕任务保持<br />可见、可控、可恢复。</h1>
+            <p>集中管理媒体库、下载队列、字幕源健康和 AI 识别策略。</p>
           </div>
-        </q-form>
+          <div class="auth-story__status"><q-icon name="lock" /> 管理面板仅在你的实例中运行</div>
+        </section>
+
+        <section class="auth-form-wrap" aria-labelledby="login-title">
+          <q-form class="auth-card" @submit="submit">
+            <div class="eyebrow">WELCOME BACK</div>
+            <h2 id="login-title">登录管理面板</h2>
+            <p class="text-grey-7 q-mb-xl">使用初始化时创建的管理员账号。</p>
+            <q-input
+              v-model="form.username"
+              outlined
+              autocomplete="username"
+              label="用户名"
+              lazy-rules
+              :rules="[(value) => !!value || '请输入用户名']"
+            >
+              <template #prepend><q-icon name="person_outline" /></template>
+            </q-input>
+            <q-input
+              v-model="form.password"
+              outlined
+              :type="showPassword ? 'text' : 'password'"
+              autocomplete="current-password"
+              label="密码"
+              lazy-rules
+              :rules="[(value) => !!value || '请输入密码']"
+            >
+              <template #prepend><q-icon name="lock_outline" /></template>
+              <template #append
+                ><q-btn
+                  flat
+                  round
+                  dense
+                  :icon="showPassword ? 'visibility_off' : 'visibility'"
+                  :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                  @click="showPassword = !showPassword"
+              /></template>
+            </q-input>
+            <q-btn
+              unelevated
+              color="primary"
+              type="submit"
+              :loading="submitting"
+              class="full-width q-mt-md"
+              size="lg"
+              label="登录"
+            />
+          </q-form>
+        </section>
       </q-page>
     </q-page-container>
   </q-layout>
@@ -58,35 +65,26 @@
 
 <script setup>
 import { reactive, ref } from 'vue';
-import { SystemMessage } from 'src/utils/message';
-import { useRouter } from 'vue-router';
-import AccessApi from 'src/api/AccessApi';
 import { LocalStorage } from 'quasar';
+import { useRouter } from 'vue-router';
+import { SystemMessage } from 'src/utils/message';
+import AccessApi from 'src/api/AccessApi';
 import { userState } from 'src/store/userState';
-import LoginBgArea from 'pages/access/login/LoginBgArea';
 
 const router = useRouter();
-const form = reactive({
-  username: '',
-  password: '',
-});
-
+const form = reactive({ username: '', password: '' });
 const submitting = ref(false);
+const showPassword = ref(false);
 
 const submit = async () => {
   submitting.value = true;
-  const formData = { ...form };
-  delete formData.confirmPassword;
-  const [res, err] = await AccessApi.login(formData);
+  const [response, error] = await AccessApi.login({ ...form });
   submitting.value = false;
-  if (err !== null) {
-    SystemMessage.error(err.message);
+  if (error) {
+    SystemMessage.error(error.message);
     return;
   }
-  const userData = {
-    accessToken: res.access_token,
-    username: form.username,
-  };
+  const userData = { accessToken: response.access_token, username: form.username };
   Object.assign(userState, userData);
   LocalStorage.set('token', userData);
   router.push('/');

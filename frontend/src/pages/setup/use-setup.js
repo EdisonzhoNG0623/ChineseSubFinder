@@ -1,6 +1,5 @@
-import { onMounted, reactive, watch } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import CommonApi from 'src/api/CommonApi';
-import { SystemMessage } from 'src/utils/message';
 
 export const setupState = reactive({
   defaultSettings: null,
@@ -22,15 +21,21 @@ export const setupState = reactive({
     },
   },
 });
+export const setupLoading = ref(false);
+export const setupError = ref('');
 
 const getDefaultSettings = async () => {
+  setupLoading.value = true;
+  setupError.value = '';
   const [res, err] = await CommonApi.getDefaultSettings();
+  setupLoading.value = false;
   if (err !== null) {
-    SystemMessage.error(err.message);
+    setupError.value = err.message || '无法读取默认配置';
     return;
   }
   setupState.defaultSettings = res;
 };
+export const reloadSetup = () => getDefaultSettings();
 
 const getFolderMap = (folders, maps) =>
   folders.reduce((r, a) => {

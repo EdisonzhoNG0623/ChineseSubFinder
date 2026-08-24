@@ -144,11 +144,11 @@ module.exports = configure((ctx) => ({
     manifest: {
       name: `ChineseSubFinder Panel`,
       short_name: `CSF Panel`,
-      description: `ChineseSubFinder Panel`,
+      description: `ChineseSubFinder subtitle operations panel`,
       display: 'standalone',
-      orientation: 'portrait',
-      background_color: '#ffffff',
-      theme_color: '#027be3',
+      orientation: 'any',
+      background_color: '#f4f6f4',
+      theme_color: '#23795d',
       icons: [
         {
           src: 'icons/android-chrome-192x192.png',

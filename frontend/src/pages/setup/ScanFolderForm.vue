@@ -16,10 +16,10 @@
       <div class="row items-center q-gutter-xs">
         <q-input
           class="col-11"
-          filled
+          outlined
           v-model="setupState.form.movieFolder[i]"
           :label="`电影目录${i > 0 ? i + 1 : ''}`"
-          hint="输入需要扫描的电影文件夹目录"
+          hint="填写容器内可访问的电影目录，例如 /media/movies"
           lazy-rules
           :rules="[(val) => (val && val.length > 0) || '不能为空', validateRemotePath]"
         />
@@ -52,10 +52,10 @@
       <div class="row items-center q-gutter-xs">
         <q-input
           class="col-11"
-          filled
+          outlined
           v-model="setupState.form.seriesFolder[i]"
           :label="`连续剧目录${i > 0 ? i + 1 : ''}`"
-          hint="输入需要扫描的连续剧文件夹目录"
+          hint="填写容器内可访问的连续剧目录，例如 /media/tv"
           lazy-rules
           :rules="[(val) => (val && val.length > 0) || '不能为空', validateRemotePath]"
         />

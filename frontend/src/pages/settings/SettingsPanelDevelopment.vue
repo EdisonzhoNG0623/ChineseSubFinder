@@ -1,12 +1,12 @@
 <template>
-  <div>
-    <q-list dense style="max-width: 600px">
+  <div class="settings-panel">
+    <q-list dense class="settings-form-list">
       <q-item tag="label" v-ripple>
         <q-item-section>
-          <q-item-label>接口失效通知</q-item-label>
-          <q-item-label caption> 项目维护人员使用，一般人员无需关心 </q-item-label>
+          <q-item-label>Bark 接口失效通知</q-item-label>
+          <q-item-label caption>可选的维护告警；普通用户保持关闭即可</q-item-label>
           <div v-if="form.enable" class="q-mt-sm">
-            <q-input v-model="form.bark_server_address" standout dense />
+            <q-input v-model="form.bark_server_address" outlined dense label="Bark Server 地址" />
           </div>
         </q-item-section>
         <q-item-section avatar top>

@@ -45,14 +45,22 @@ export const resetForm = () => {
   Object.assign(formModel, deepCopy(settingsState.settings));
 };
 
+export const settingsLoading = ref(false);
+export const settingsError = ref('');
+
 const getSettings = async () => {
+  settingsLoading.value = true;
+  settingsError.value = '';
   const [res, err] = await SettingApi.get();
+  settingsLoading.value = false;
   if (err !== null) {
-    SystemMessage.error(err.message);
+    settingsError.value = err.message || '无法读取设置';
     return;
   }
   settingsState.settings = res;
 };
+
+export const reloadSettings = () => getSettings();
 
 export const useSettings = () => {
   getSettings();

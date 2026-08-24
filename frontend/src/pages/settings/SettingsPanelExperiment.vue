@@ -1,6 +1,6 @@
 <template>
-  <div>
-    <q-list style="max-width: 600px" dense>
+  <div class="settings-panel">
+    <q-list class="settings-form-list" dense>
       <q-item>
         <q-item-section>
           <q-item-label>自动转换字幕文件编码</q-item-label>
@@ -52,15 +52,16 @@
 
       <q-item>
         <q-item-section>
-          <q-item-label>远程Chrome</q-item-label>
+          <q-item-label>远程 Chrome</q-item-label>
           <q-item-label caption>
-            本功能能够将本程序使用的 Chrome 操作移到一个有算力和资源的硬件上，这样部署本程序的资源要求进一步降低。<br />
-            需要自行参看<a
+            将浏览器任务交给另一台主机运行，用于降低当前实例的资源占用。该能力为实验性选项，需要自行部署远程启动器并验证兼容性。<br />
+            参阅<a
               class="text-primary"
               href="https://go-rod.github.io/i18n/zh-CN/#/custom-launch?id=远程管理启动器"
               target="_blank"
-              >https://go-rod.github.io/i18n/zh-CN/#/custom-launch?id=远程管理启动器</a
-            >文档部署实验性功能，可用性和稳定性存疑，未必会继续支持更新。除非 go-rod 更新。
+              rel="noopener noreferrer"
+              >go-rod 远程启动器文档</a
+            >。
           </q-item-label>
         </q-item-section>
         <q-item-section avatar>
@@ -119,22 +120,18 @@
 
       <q-item>
         <q-item-section>
-          <q-item-label>本地Chrome</q-item-label>
+          <q-item-label>自定义本地 Chrome</q-item-label>
           <q-item-label caption>
-            如果本程序能够自动下载 Chrome 就不建议自己制定 Chrome 版本，因为如果本程序更新了， Chrome
-            也会自动下载最新的，但是你指定的，我是没法更新的，有问题也只有你自己去手动更新 Chrome。建
-            议还是优先还是解决网络问题去下载 Chrome。下载 Chrome 是又 go-rod 进行的，有问题也只能去提
-            issues。注意以下几点：
+            通常建议让程序自动管理 Chrome。只有自动下载不可用或需要固定版本时才设置此项；自定义版本需要自行更新。
             <div>
               <ol>
                 <li>
-                  如果是 Docker 用户，推荐映射你解压后的 /volume1/docker/chinesesubfinder/Chrome 文件 夹 到
-                  /app/cache/Plugin/Chrome 文件夹中，那么你需要填写的 Chrome 容器内的完整路径应 该是（举例，按自己下载的
-                  Chrome 来改）: /app/cache/Plugin/Chrome/chrome
+                  Docker / Unraid 用户需将 Chrome 目录映射进容器，并填写容器内可执行文件路径，例如
+                  /app/cache/Plugin/Chrome/chrome。
                 </li>
                 <li>如果是 Windows 用户，那么就是你 Chrome.exe 的完整路径</li>
                 <li>Chrome 版本不要太低</li>
-                <li>请确认指定的chrome和对应平台、CPU架构一致</li>
+                <li>确认 Chrome 与运行平台和 CPU 架构一致</li>
               </ol>
             </div>
           </q-item-label>
@@ -163,14 +160,15 @@
 
       <q-item>
         <q-item-section>
-          <q-item-label>API key</q-item-label>
+          <q-item-label>本地 API 访问</q-item-label>
           <q-item-label caption>
-            本程序提供一些接口给开发者使用，通过API key鉴权，具体参见
+            为脚本或第三方工具启用 API Key 鉴权，具体参见
             <!-- eslint-disable -->
             <a
               href="https://github.com/ChineseSubFinder/ChineseSubFinder/blob/docs/DesignFile/ApiKey%E8%AE%BE%E8%AE%A1/ApiKey%E8%AE%BE%E8%AE%A1.md"
               class="text-primary"
               target="_blank"
+              rel="noopener noreferrer"
               >开发文档</a
             >
           </q-item-label>

@@ -22,11 +22,7 @@
           <div class="text-bold q-mb-sm cursor-pointer" @click="showSelectSubtitleDialog">
             字幕：{{ selectedSub?.split(/\/|\\/).pop() }}
           </div>
-          <artplayer
-            :option="artOption"
-            style="height: 80vh; width: calc(1920 / 1080 * 80vh)"
-            @get-instance="handleGetArtInstance"
-          ></artplayer>
+          <artplayer :option="artOption" class="video-preview-player" @get-instance="handleGetArtInstance"></artplayer>
         </div>
 
         <div class="row items-center" v-else>
@@ -85,7 +81,6 @@ const handleGetArtInstance = (instance) => {
 const showSelectSubtitleDialog = () => {
   $q.dialog({
     title: '选择字幕',
-    style: 'width: 800px',
     options: {
       type: 'radio',
       model: selectedSub.value,
