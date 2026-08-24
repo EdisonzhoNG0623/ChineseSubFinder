@@ -22,8 +22,8 @@ type QueryVariant struct {
 // Exact aired/scene tokens precede absolute aliases; a bare absolute number is
 // deliberately last because it has the greatest false-positive risk.
 func BuildSearchPlan(aliases []string, identity Identity) []QueryVariant {
-	plan := make([]QueryVariant, 0, len(aliases)*5)
-	seen := make(map[string]struct{}, len(aliases)*5)
+	plan := make([]QueryVariant, 0, len(aliases)*6)
+	seen := make(map[string]struct{}, len(aliases)*6)
 	appendQuery := func(kind QueryKind, query string) {
 		query = strings.Join(strings.Fields(query), " ")
 		if query == "" {
@@ -57,6 +57,11 @@ func BuildSearchPlan(aliases []string, identity Identity) []QueryVariant {
 	for _, alias := range aliases {
 		if identity.AbsoluteEpisode > 0 {
 			appendQuery(QueryAbsolute, fmt.Sprintf("%s EP%d", alias, identity.AbsoluteEpisode))
+		}
+	}
+	for _, alias := range aliases {
+		if identity.AbsoluteEpisode > 0 {
+			appendQuery(QueryAbsolute, fmt.Sprintf("%s #%d", alias, identity.AbsoluteEpisode))
 		}
 	}
 	for _, alias := range aliases {

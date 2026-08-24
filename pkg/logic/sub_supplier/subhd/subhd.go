@@ -30,12 +30,12 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/mix_media_info"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/episode_identity"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/notify_center"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_parser_hub"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/Tnze/go.num/v2/zh"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/nfnt/resize"
@@ -49,6 +49,8 @@ type Supplier struct {
 	operationTimeout time.Duration
 	isAlive          bool
 	requestLock      sync.Mutex
+	cacheInitOnce    sync.Once
+	searchCache      *subHDSearchCache
 }
 
 const (
@@ -184,6 +186,19 @@ func (s *Supplier) GetSubListFromFile4Movie(filePath string) ([]supplier.SubInfo
 func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
 	s.requestLock.Lock()
 	defer s.requestLock.Unlock()
+	return s.getSubListFromFile4Series(seriesInfo, false)
+}
+
+func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	s.requestLock.Lock()
+	defer s.requestLock.Unlock()
+	return s.getSubListFromFile4Series(seriesInfo, true)
+}
+
+func (s *Supplier) getSubListFromFile4Series(seriesInfo *series.SeriesInfo, anime bool) ([]supplier.SubInfo, error) {
+	if seriesInfo == nil || len(seriesInfo.EpList) == 0 {
+		return nil, errors.New("subhd series info has no episodes")
+	}
 
 	// TODO 是用本地的 Browser 还是远程的，推荐是远程的
 	browser, closeBrowser, err := s.newBrowserWithTimeout(rod_helper.NewBrowserOptions(s.log, true, settings.Get()))
@@ -195,59 +210,54 @@ func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]s
 	mediaInfo, err := mix_media_info.GetMixMediaInfo(s.fileDownloader.MediaInfoDealers,
 		seriesInfo.EpList[0].FileFullPath, false)
 	if err != nil {
-		s.log.Errorln(s.GetSupplierName(), seriesInfo.EpList[0].FileFullPath, "GetMixMediaInfo", err)
-		return nil, err
+		// Local series metadata remains a useful fallback when the remote
+		// metadata dealer is temporarily unavailable.
+		s.log.Warningln(s.GetSupplierName(), seriesInfo.EpList[0].FileFullPath,
+			"GetMixMediaInfo failed, continue with local series title", err)
+		mediaInfo = nil
 	}
-	// 优先中文查询
-	keyWord, err := mix_media_info.KeyWordSelect(mediaInfo, seriesInfo.EpList[0].FileFullPath, true, "cn")
-	if err != nil {
-		s.log.Errorln(s.GetSupplierName(), seriesInfo.EpList[0].FileFullPath, "keyWordSelect", err)
-		return nil, err
-	}
-	if keyWord == "" {
-		// 更换英文译名
-		keyWord, err = mix_media_info.KeyWordSelect(mediaInfo, seriesInfo.EpList[0].FileFullPath, true, "en")
-		if err != nil {
-			s.log.Errorln(s.GetSupplierName(), seriesInfo.EpList[0].FileFullPath, "keyWordSelect", err)
-			return nil, err
-		}
+	aliases := subHDSeriesAliases(mediaInfo, seriesInfo)
+	if len(aliases) == 0 {
+		return nil, errors.New("subhd series has no searchable title aliases")
 	}
 	var subInfos = make([]supplier.SubInfo, 0)
 	var subList = make([]HdListItem, 0)
-	for value := range seriesInfo.NeedDlSeasonDict {
-		// 第一级界面，找到影片的详情界面
-		//keyword := seriesInfo.Name + " 第" + zh.Uint64(value).String() + "季"
-		keyword := keyWord + " 第" + zh.Uint64(value).String() + "季"
-		s.log.Infoln("Search Keyword:", keyword)
-		detailPageUrl, err := s.step0(browser, keyword)
-		if err != nil {
-			s.log.Errorln("subhd step0", keyword)
-			return nil, err
-		}
-		if detailPageUrl == "" {
-			// 如果只是搜索不到，则继续换关键词
-			s.log.Warning("subhd first search keyword", keyword, "not found")
-			keyword = seriesInfo.Name
-			s.log.Warning("subhd Retry", keyword)
-			s.log.Infoln("Search Keyword:", keyword)
-			detailPageUrl, err = s.step0(browser, keyword)
+	seenListItems := make(map[string]struct{})
+	seasons := subHDTargetSeasons(seriesInfo)
+	for _, season := range seasons {
+		queries := buildSubHDSearchPlan(aliases, season, episodesForSeason(seriesInfo, season), anime)
+		detailPageURL := ""
+		matchedQuery := subHDSearchQuery{}
+		for _, query := range queries {
+			s.log.Debugf("subhd search query_kind=%s keyword=%q", query.Kind, query.Keyword)
+			detailPageURL, err = s.cachedStep0(browser, query)
 			if err != nil {
-				s.log.Errorln("subhd step0", keyword)
+				s.log.Errorln("subhd step0", query.Keyword)
 				return nil, err
 			}
+			if detailPageURL != "" {
+				matchedQuery = query
+				break
+			}
 		}
-		if detailPageUrl == "" {
-			s.log.Warning("subhd search keyword", keyword, "not found")
+		if detailPageURL == "" {
+			s.log.Warningf("subhd no detail page found season=%d aliases=%q", season, aliases)
 			continue
 		}
-		// 列举字幕
-		oneSubList, err := s.step1(browser, detailPageUrl, false)
+		s.log.Infof("subhd search matched query_kind=%s keyword=%q detail=%q", matchedQuery.Kind, matchedQuery.Keyword, detailPageURL)
+		oneSubList, err := s.cachedStep1(browser, detailPageURL)
 		if err != nil {
-			s.log.Errorln("subhd step1", keyword)
+			s.log.Errorln("subhd step1", matchedQuery.Keyword)
 			return nil, err
 		}
-
-		subList = append(subList, oneSubList...)
+		for _, item := range oneSubList {
+			key := item.BaseUrl + "|" + item.Url + "|" + item.Title
+			if _, exists := seenListItems[key]; exists {
+				continue
+			}
+			seenListItems[key] = struct{}{}
+			subList = append(subList, item)
+		}
 	}
 	// 与剧集需要下载的集 List 进行比较，找到需要下载的列表
 	// 找到那些 Eps 需要下载字幕的
@@ -265,10 +275,6 @@ func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]s
 	}
 
 	return subInfos, nil
-}
-
-func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
-	return s.GetSubListFromFile4Series(seriesInfo)
 }
 
 func (s *Supplier) getSubListFromFile4Movie(filePath string) ([]supplier.SubInfo, error) {
@@ -390,7 +396,8 @@ func (s *Supplier) whichEpisodeNeedDownloadSub(seriesInfo *series.SeriesInfo, al
 	for _, subInfo := range allSubList {
 		_, season, episode, err := decode.GetSeasonAndEpisodeFromSubFileName(subInfo.Title)
 		if err != nil {
-			s.log.Errorln("whichEpisodeNeedDownloadSub.GetVideoInfoFromFileFullPath", subInfo.Title, err)
+			// Anime archives often expose only an absolute episode number. Keep
+			// the item available for the absolute matcher below.
 			continue
 		}
 		subInfo.Season = season
@@ -413,15 +420,38 @@ func (s *Supplier) whichEpisodeNeedDownloadSub(seriesInfo *series.SeriesInfo, al
 	// 本地的视频列表，找到没有字幕的
 	// 需要进行下载字幕的列表
 	var subInfoNeedDownload = make([]HdListItem, 0)
+	selectedURLs := make(map[string]struct{})
 	// 有那些 Eps 需要下载的，按 SxEx 反回 epsKey
 	for epsKey, epsInfo := range seriesInfo.NeedDlEpsKeyList {
 		// 从一堆字幕里面找合适的
 		value, ok := allSubDict[epsKey]
 		// 是否有
 		if ok == true && len(value) > 0 {
-			value[0].Season = epsInfo.Season
-			value[0].Episode = epsInfo.Episode
-			subInfoNeedDownload = append(subInfoNeedDownload, value[0])
+			item, found := bestSubHDItem(value, selectedURLs)
+			if found {
+				item.Season = epsInfo.Season
+				item.Episode = epsInfo.Episode
+				subInfoNeedDownload = append(subInfoNeedDownload, item)
+				selectedURLs[item.Url] = struct{}{}
+				continue
+			}
+		}
+		if epsInfo.AbsoluteEpisode > 0 {
+			absoluteMatches := make([]HdListItem, 0)
+			for _, item := range allSubList {
+				if episode_identity.FilenameContainsAbsoluteEpisode(item.Title, epsInfo.AbsoluteEpisode) {
+					absoluteMatches = append(absoluteMatches, item)
+				}
+			}
+			item, found := bestSubHDItem(absoluteMatches, selectedURLs)
+			if found {
+				item.Season = epsInfo.Season
+				item.Episode = epsInfo.Episode
+				subInfoNeedDownload = append(subInfoNeedDownload, item)
+				selectedURLs[item.Url] = struct{}{}
+				s.log.Infof("subhd absolute episode matched absolute=%d local=S%02dE%02d title=%q",
+					epsInfo.AbsoluteEpisode, epsInfo.Season, epsInfo.Episode, item.Title)
+			}
 		}
 	}
 	// 全季的字幕列表，也拼进去，后面进行下载
@@ -430,15 +460,44 @@ func (s *Supplier) whichEpisodeNeedDownloadSub(seriesInfo *series.SeriesInfo, al
 		if len(infos) < 1 {
 			continue
 		}
-		subInfoNeedDownload = append(subInfoNeedDownload, infos[0])
+		item, found := bestSubHDItem(infos, selectedURLs)
+		if !found {
+			continue
+		}
+		subInfoNeedDownload = append(subInfoNeedDownload, item)
+		selectedURLs[item.Url] = struct{}{}
 	}
 
 	// 返回前，需要把每一个 Eps 的 Season Episode 信息填充到每个 SubInfo 中
 	return subInfoNeedDownload
 }
 
+func bestSubHDItem(items []HdListItem, selectedURLs map[string]struct{}) (HdListItem, bool) {
+	best := HdListItem{}
+	found := false
+	for _, item := range items {
+		if _, selected := selectedURLs[item.Url]; selected {
+			continue
+		}
+		if !found || item.DownCount > best.DownCount ||
+			(item.DownCount == best.DownCount && item.Title < best.Title) {
+			best = item
+			found = true
+		}
+	}
+	return best, found
+}
+
 // step0 找到这个影片的详情列表
 func (s *Supplier) step0(browser *rod.Browser, keyword string) (string, error) {
+	detailPageURL, _, err := s.step0WithCacheability(browser, keyword)
+	return detailPageURL, err
+}
+
+// step0WithCacheability distinguishes a confirmed empty result from an
+// inconclusive rate-limit page. Both look like an empty search to the current
+// call, but only a confirmed empty page is safe to negative-cache.
+func (s *Supplier) step0WithCacheability(browser *rod.Browser, keyword string) (string, bool, error) {
 	var err error
 	defer func() {
 		if err != nil {
@@ -448,21 +507,24 @@ func (s *Supplier) step0(browser *rod.Browser, keyword string) (string, error) {
 
 	result, page, err := rod_helper.HttpGetFromBrowser(browser, fmt.Sprintf(settings.Get().AdvancedSettings.SuppliersSettings.SubHD.RootUrl+common.SubSubHDSearchUrl, url.QueryEscape(keyword)), s.tt)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer func() {
 		_ = page.Close()
 	}()
+	if subHDSearchPageBlocked(result) {
+		return "", false, errSubHDSearchBlocked
+	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(result))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	imgSelection := doc.Find("img.rounded-start")
 	_, ok := imgSelection.Attr("src")
 	if ok == true {
 
 		if len(imgSelection.Nodes) < 1 {
-			return "", common.SubHDStep0ImgParentLessThan1
+			return "", false, common.SubHDStep0ImgParentLessThan1
 		}
 		step1Url := ""
 		if imgSelection.Nodes[0].Parent.Data == "a" {
@@ -483,13 +545,14 @@ func (s *Supplier) step0(browser *rod.Browser, keyword string) (string, error) {
 			}
 		}
 		if step1Url == "" {
-			return "", common.SubHDStep0HrefIsNull
+			return "", false, common.SubHDStep0HrefIsNull
 		}
-		return step1Url, nil
+		return step1Url, true, nil
 	} else {
-		// 当前 SubHD 的无结果页仍显示“共 0 条”，但站点限流时也可能
-		// 省略计数节点。没有详情链接时按无结果处理，避免每个媒体条目刷 ERROR。
-		return "", nil
+		// A page without a detail link may be a real empty result or a
+		// rate-limit response. Preserve the old empty-result behavior for this
+		// call, but only let the caller cache an explicit zero-result page.
+		return "", subHDSearchPageHasNoResults(result), nil
 	}
 }
 
@@ -509,6 +572,9 @@ func (s *Supplier) step1(browser *rod.Browser, detailPageUrl string, isMovieOrSe
 	defer func() {
 		_ = page.Close()
 	}()
+	if subHDSearchPageBlocked(result) {
+		return nil, errSubHDSearchBlocked
+	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(result))
 	if err != nil {
 		return nil, err
