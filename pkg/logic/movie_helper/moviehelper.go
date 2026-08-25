@@ -4,15 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ai_ambiguity"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/supplier_search"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_candidate"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ifaces"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
@@ -31,52 +29,36 @@ import (
 
 // OneMovieDlSubInAllSite 一部电影在所有的网站下载相应的字幕
 func OneMovieDlSubInAllSite(logger *logrus.Logger, Suppliers []ifaces.ISupplier, oneVideoFullPath string, i int64) []supplier.SubInfo {
+	subInfos, _ := OneMovieDlSubInAllSiteContext(context.Background(), logger, Suppliers, oneVideoFullPath, i, false)
+	return subInfos
+}
+
+func OneMovieDlSubInAllSiteContext(ctx context.Context, logger *logrus.Logger, Suppliers []ifaces.ISupplier, oneVideoFullPath string, i int64, requireAllSuppliers bool) ([]supplier.SubInfo, error) {
 
 	defer func() {
 		logger.Infoln(common.QueueName, i, "DlSub End", oneVideoFullPath)
 	}()
 
-	var outSUbInfos = make([]supplier.SubInfo, 0)
-	var outMu sync.Mutex
-	var supplierWorkers sync.WaitGroup
 	logger.Infoln(common.QueueName, i, "DlSub Start", oneVideoFullPath)
-	for _, oneSupplier := range Suppliers {
-		oneSupplier := oneSupplier
-		supplierWorkers.Add(1)
-		go func() {
-			defer supplierWorkers.Done()
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					logger.Errorf("%s %d %s supplier panic: %v\n%s", common.QueueName, i,
-						oneSupplier.GetSupplierName(), recovered, debug.Stack())
-				}
-			}()
-
-			logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), oneVideoFullPath)
-
-			if oneSupplier.OverDailyDownloadLimit() == true {
-				logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), "Over Daily Download Limit")
-				return
-			}
-
-			startedAt := time.Now()
-			subInfos, err := OneMovieDlSubInOneSite(logger, oneVideoFullPath, i, oneSupplier)
-			subtitle_metrics.RecordAttempt(oneSupplier.GetSupplierName(), time.Since(startedAt), len(subInfos), err)
-			if err != nil {
-				logger.Errorln(common.QueueName, i, oneSupplier.GetSupplierName(), "oneMovieDlSubInOneSite", err)
-				return
-			}
-			outMu.Lock()
-			outSUbInfos = append(outSUbInfos, subInfos...)
-			outMu.Unlock()
-		}()
-	}
-	supplierWorkers.Wait()
 	target := subtitle_candidate.Target{
 		Titles: []string{strings.TrimSuffix(filepath.Base(oneVideoFullPath), filepath.Ext(oneVideoFullPath))},
 	}
+	fastEnough := func(items []supplier.SubInfo) bool {
+		if requireAllSuppliers {
+			return false
+		}
+		ranked := subtitle_candidate.Rank(items, target)
+		return len(ranked) > 0 && ranked[0].Score >= 100
+	}
+	outSUbInfos, searchErr := supplier_search.Run(ctx, logger, Suppliers, supplier_search.NewSearchID("movie"), fastEnough,
+		func(oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
+			return OneMovieDlSubInOneSite(logger, oneVideoFullPath, i, oneSupplier)
+		})
+	if searchErr != nil {
+		logger.WithError(searchErr).Warn("movie supplier search stopped")
+	}
 	var decisionErr error
-	outSUbInfos, _, decisionErr = subtitle_candidate.RankWithAmbiguityResolver(context.Background(), outSUbInfos, target, ai_ambiguity.ConfiguredResolver())
+	outSUbInfos, _, decisionErr = subtitle_candidate.RankWithAmbiguityResolver(ctx, outSUbInfos, target, ai_ambiguity.ConfiguredResolver())
 	if decisionErr != nil {
 		logger.Warningln("AI ambiguity resolver abstained", decisionErr)
 	}
@@ -85,7 +67,7 @@ func OneMovieDlSubInAllSite(logger *logrus.Logger, Suppliers []ifaces.ISupplier,
 		logger.Debugln(common.QueueName, i, "OneMovieDlSubInAllSite get sub", index, "Name:", info.Name, "FileUrl:", info.FileUrl)
 	}
 
-	return outSUbInfos
+	return outSUbInfos, searchErr
 }
 
 // OneMovieDlSubInOneSite 一部电影在一个站点下载字幕

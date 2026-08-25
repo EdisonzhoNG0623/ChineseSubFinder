@@ -31,7 +31,7 @@ func (d *Downloader) movieDlFunc(ctx context.Context, job taskQueue2.OneJob, dow
 	}
 
 	// 字幕都下载缓存好了，需要抉择存哪一个，优先选择中文双语的，然后到中文
-	organizeSubFiles, err := nowSubSupplierHub.DownloadSub4Movie(job.VideoFPath, downloadIndex)
+	organizeSubFiles, err := nowSubSupplierHub.DownloadSub4MovieContext(ctx, job.VideoFPath, downloadIndex)
 	if err != nil {
 		err = errors.New(fmt.Sprintf("subSupplierHub.DownloadSub4Movie: %v, %v", job.VideoFPath, err))
 		d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
@@ -42,6 +42,10 @@ func (d *Downloader) movieDlFunc(ctx context.Context, job taskQueue2.OneJob, dow
 		d.log.Infoln(task_queue.ErrNoSubFound.Error(), filepath.Base(job.VideoFPath))
 		d.downloadQueue.AutoDetectUpdateJobStatus(job, task_queue.ErrNoSubFound)
 		return nil
+	}
+	if err = ctx.Err(); err != nil {
+		d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
+		return err
 	}
 
 	err = d.oneVideoSelectBestSub(job.VideoFPath, organizeSubFiles)
@@ -54,6 +58,9 @@ func (d *Downloader) movieDlFunc(ctx context.Context, job taskQueue2.OneJob, dow
 
 	// TODO 刷新字幕，这里是 Emby 的，如果是其他的，需要再对接对应的媒体服务器
 	if settings.Get().EmbySettings.Enable == true && d.embyHelper != nil && job.MediaServerInsideVideoID != "" {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 
 		d.log.Infoln("字幕下载完毕，尝试刷新 Emby 中对应字幕", job.VideoFPath, job.MediaServerInsideVideoID)
 		err = d.embyHelper.EmbyApi.UpdateVideoSubList(settings.Get().EmbySettings, job.MediaServerInsideVideoID)
@@ -100,7 +107,7 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 	// 下载好的字幕文件
 	var organizeSubFiles map[string][]string
 	// 下载的接口是统一的
-	organizeSubFiles, err = nowSubSupplierHub.DownloadSub4Series(job.SeriesRootDirPath,
+	organizeSubFiles, err = nowSubSupplierHub.DownloadSub4SeriesContext(ctx, job.SeriesRootDirPath,
 		seriesInfo,
 		downloadIndex)
 	// DownloadSub4Series enriches alternate anime numbering before suppliers

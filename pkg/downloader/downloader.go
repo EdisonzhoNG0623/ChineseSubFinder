@@ -3,6 +3,7 @@ package downloader
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -29,6 +30,7 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	subCommon "github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_formatter/common"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/task_queue"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
@@ -109,7 +111,7 @@ func NewDownloader(inSubFormatter ifaces.ISubFormatter, fileDownloader *file_dow
 	downloader.downloadQueue = downloadQueue
 	// 单个任务的超时设置
 	downloader.ctx, downloader.cancel = context.WithCancel(context.Background())
-	downloader.queueWorkerSlots = make(chan struct{}, 2)
+	downloader.queueWorkerSlots = make(chan struct{}, settings.Get().AdvancedSettings.TaskQueue.DownloadConcurrency)
 	downloader.acceptQueueWorkers = true
 	downloader.activeSeriesWorkers = make(map[string]int)
 	// 用于字幕下载后的刷新
@@ -129,6 +131,9 @@ func NewDownloader(inSubFormatter ifaces.ISubFormatter, fileDownloader *file_dow
 
 	downloader.movieInfoMap = make(map[string]MovieInfo)
 	downloader.seasonInfoMap = make(map[string]SeasonInfo)
+	if err := subtitle_metrics.ConfigurePersistence(filepath.Join(pkg.GetConfigRootDirFPath(), "cache", "supplier_metrics.json")); err != nil {
+		downloader.log.Warningln("load supplier metrics:", err)
+	}
 
 	err := downloader.loadVideoListCache()
 	if err != nil {
@@ -260,5 +265,8 @@ func (d *Downloader) Cancel() {
 	d.cancel()
 	d.queueLaunchLock.Unlock()
 	d.queueWorkerWG.Wait()
+	if err := subtitle_metrics.FlushPersistence(); err != nil {
+		d.log.Warningln("flush supplier metrics:", err)
+	}
 	d.log.Infoln("Downloader.Cancel()")
 }

@@ -81,6 +81,12 @@ func buildSupplierDiagnostics(s *settings.Settings, runtime map[string]subtitle_
 			diagnostic.CooldownUntil, diagnostic.Attempts = record.CooldownUntil, record.Attempts
 			diagnostic.CandidateHits, diagnostic.EmptyResults, diagnostic.Errors = record.CandidateHits, record.EmptyResults, record.Errors
 			diagnostic.Candidates, diagnostic.LastAttemptAt, diagnostic.LastAttemptMillis = record.Candidates, record.LastAttemptAt, record.LastAttemptMs
+			diagnostic.AverageAttemptMs, diagnostic.P95AttemptMs = record.AverageAttemptMillis(), record.P95AttemptMillis()
+			diagnostic.Timeouts, diagnostic.CircuitSkips, diagnostic.CircuitOpenUntil = record.Timeouts, record.CircuitSkips, record.CircuitOpenUntil
+			if time.Now().Before(record.CircuitOpenUntil) {
+				diagnostic.Health = "DEGRADED"
+				diagnostic.StatusMessage = "连续失败，已临时跳过以释放队列"
+			}
 		}
 		out = append(out, diagnostic)
 	}

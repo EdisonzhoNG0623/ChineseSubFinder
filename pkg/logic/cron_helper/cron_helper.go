@@ -1,6 +1,7 @@
 package cron_helper
 
 import (
+	"fmt"
 	"github.com/ChineseSubFinder/ChineseSubFinder/internal/dao"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/file_downloader"
@@ -132,7 +133,8 @@ func (ch *CronHelper) Start(runImmediately bool) {
 		ch.Logger.Panicln("CronHelper SupplierCheck, SupplierCheck Cron entryID:", ch.entryIDSupplierCheck, "Error:", err)
 	}
 	// 这个可以由 ch.Downloader.Cancel() 取消执行
-	ch.entryIDQueueDownloader, err = ch.c.AddFunc("@every 15s", ch.Downloader.QueueDownloader)
+	queueInterval := fmt.Sprintf("@every %ds", settings.Get().AdvancedSettings.TaskQueue.Interval)
+	ch.entryIDQueueDownloader, err = ch.c.AddFunc(queueInterval, ch.Downloader.QueueDownloader)
 	if err != nil {
 		ch.Logger.Panicln("CronHelper QueueDownloader, QueueDownloader Cron entryID:", ch.entryIDQueueDownloader, "Error:", err)
 	}

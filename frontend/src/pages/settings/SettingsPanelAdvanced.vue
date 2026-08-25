@@ -175,7 +175,8 @@
           <q-input
             class="col"
             v-model.number="form.task_queue.one_job_time_out"
-            label="单个任务超时"
+            label="单个任务总超时"
+            shadow-text="包含字幕源搜索、候选处理与保存；超时后按重试策略处理"
             standout
             dense
             suffix="秒"
@@ -183,14 +184,30 @@
           />
           <q-input
             class="col"
+            v-model.number="form.task_queue.download_concurrency"
+            type="number"
+            min="1"
+            max="4"
+            label="并行下载任务数"
+            shadow-text="建议 2；机械硬盘或慢速网络盘使用 1，高性能本地存储可尝试 3–4"
+            standout
+            dense
+            suffix="个"
+            :rules="[(val) => (val >= 1 && val <= 4) || '请输入 1–4']"
+          />
+          <q-input
+            class="col"
             v-model.number="form.task_queue.interval"
-            label="任务间隔"
-            shadow-text="防止频率太高触发防爬检测"
+            label="队列轮询间隔"
+            shadow-text="每隔多久尝试领取新任务；实际并发仍受上方并行数限制"
             standout
             dense
             suffix="秒"
             :rules="[(val) => !!val || '不能为空']"
           />
+          <div class="status-strip status-strip--warning q-mt-sm">
+            并行下载任务数和队列轮询间隔在服务启动时载入，修改后需重启容器。
+          </div>
           <q-input
             class="col"
             v-model.number="form.task_queue.expiration_time"

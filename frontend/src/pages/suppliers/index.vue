@@ -80,11 +80,21 @@
         <template #body-cell-hit="{ row }">
           <q-td>
             <div>{{ row.candidate_hits }} 次命中 · {{ row.candidates }} 个候选</div>
-            <div class="text-caption text-grey-7">{{ row.empty_results }} 次空结果 / {{ row.errors }} 次错误</div>
+            <div class="text-caption text-grey-7">
+              {{ row.empty_results }} 次空结果 / {{ row.errors }} 次错误 / {{ row.timeouts }} 次超时
+            </div>
+            <div v-if="row.circuit_skips" class="text-caption text-warning">
+              熔断已跳过 {{ row.circuit_skips }} 次
+            </div>
           </q-td>
         </template>
         <template #body-cell-latency="{ row }">
-          <q-td>{{ row.latency_millis > 0 ? `${row.latency_millis} ms` : '—' }}</q-td>
+          <q-td>
+            <div>{{ row.average_attempt_millis > 0 ? `平均 ${formatDuration(row.average_attempt_millis)}` : '—' }}</div>
+            <div class="text-caption text-grey-7">
+              P95 {{ formatDuration(row.p95_attempt_millis) }} · 检测 {{ formatDuration(row.latency_millis) }}
+            </div>
+          </q-td>
         </template>
         <template #body-cell-capabilities="{ row }">
           <q-td
@@ -96,7 +106,7 @@
       </q-table>
     </q-card>
     <div class="text-caption text-grey-7 q-mt-sm">
-      数据每 20 秒刷新。检测结果与命中统计仅保存在内存，不记录媒体路径或密钥。
+      数据每 20 秒刷新。命中、耗时和熔断聚合统计会持久化；不记录媒体路径、候选名称、错误正文或密钥。
     </div>
   </q-page>
 </template>
@@ -116,7 +126,7 @@ const columns = [
   { name: 'status', label: '状态', field: 'health', align: 'left' },
   { name: 'usage', label: '今日配额', align: 'left' },
   { name: 'hit', label: '运行命中', align: 'left' },
-  { name: 'latency', label: '检测延迟', align: 'left' },
+  { name: 'latency', label: '运行耗时', align: 'left' },
   { name: 'capabilities', label: '能力', align: 'left' },
 ];
 
@@ -149,6 +159,11 @@ const headline = computed(() => [
 const usageRatio = (row) => Math.min(1, row.daily_limit > 0 ? row.daily_used / row.daily_limit : 0);
 const usageText = (row) =>
   row.daily_limit < 0 ? `${row.daily_used} / 不限` : `${row.daily_used} / ${row.daily_limit}`;
+const formatDuration = (millis) => {
+  if (!millis) return '—';
+  if (millis < 1000) return `${millis} ms`;
+  return `${(millis / 1000).toFixed(millis < 10000 ? 1 : 0)} s`;
+};
 
 const load = async (silent = false) => {
   if (!silent) loading.value = true;

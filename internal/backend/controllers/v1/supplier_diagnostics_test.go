@@ -2,6 +2,7 @@ package v1
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
@@ -21,6 +22,30 @@ func TestSupplierDiagnosticsNeverExposeCredentialsAndRetireA4K(t *testing.T) {
 			t.Fatal("credential leaked through diagnostics")
 		}
 	}
+}
+
+func TestSupplierDiagnosticsExposeBoundedPerformanceAggregates(t *testing.T) {
+	s := settings.NewSettings(t.TempDir())
+	openUntil := time.Now().Add(time.Minute)
+	runtime := map[string]subtitle_metrics.SupplierRuntime{
+		common.SubSiteXunLei: {
+			Name: common.SubSiteXunLei, Attempts: 2, TotalAttemptMs: 3000, MaxAttemptMs: 2000,
+			AttemptBuckets: [6]int64{0, 2}, Timeouts: 1, CircuitSkips: 3, CircuitOpenUntil: openUntil,
+		},
+	}
+	for _, diagnostic := range buildSupplierDiagnostics(s, runtime, nil) {
+		if diagnostic.Name != common.SubSiteXunLei {
+			continue
+		}
+		if diagnostic.AverageAttemptMs != 1500 || diagnostic.P95AttemptMs != 5000 || diagnostic.Timeouts != 1 || diagnostic.CircuitSkips != 3 {
+			t.Fatalf("unexpected performance aggregates: %+v", diagnostic)
+		}
+		if diagnostic.Health != "DEGRADED" || diagnostic.CircuitOpenUntil != openUntil {
+			t.Fatalf("open circuit not reflected in diagnostics: %+v", diagnostic)
+		}
+		return
+	}
+	t.Fatal("xunlei diagnostic not found")
 }
 
 func TestSupplierAttemptWithoutHealthKeepsUnknownStatus(t *testing.T) {

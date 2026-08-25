@@ -1,6 +1,7 @@
 package sub_supplier
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"time"
@@ -148,12 +149,23 @@ func (d *SubSupplierHub) SeriesNeedDlSubFromEmby(dealers *media_info_dealers.Dea
 
 // DownloadSub4Movie 某一个电影字幕下载，下载完毕后，返回下载缓存每个字幕的位置，这里将只关心下载字幕，判断是否在时间范围内要不要下载不在这里判断，包括是否是中文视频的问题
 func (d *SubSupplierHub) DownloadSub4Movie(videoFullPath string, index int64) ([]string, error) {
+	return d.DownloadSub4MovieContext(context.Background(), videoFullPath, index)
+}
+
+func (d *SubSupplierHub) DownloadSub4MovieContext(ctx context.Context, videoFullPath string, index int64) ([]string, error) {
 
 	// 下载所有字幕
-	subInfos := movieHelper.OneMovieDlSubInAllSite(d.log, d.Suppliers, videoFullPath, index)
+	subInfos, searchErr := movieHelper.OneMovieDlSubInAllSiteContext(ctx, d.log, d.Suppliers, videoFullPath, index,
+		settings.Get().AdvancedSettings.SaveMultiSub)
+	if searchErr != nil && len(subInfos) == 0 {
+		return nil, searchErr
+	}
 	if subInfos == nil || len(subInfos) < 1 {
 		d.log.Warningln("OneMovieDlSubInAllSite.subInfos == 0, No Sub Downloaded.")
 		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	// 整理字幕，比如解压什么的
 	organizeSubFiles, err := sub_helper.OrganizeDlSubFiles(d.log, filepath.Base(videoFullPath), subInfos, true)
@@ -175,8 +187,11 @@ func (d *SubSupplierHub) DownloadSub4Movie(videoFullPath string, index int64) ([
 
 // DownloadSub4Series 某一部连续剧的字幕下载，下载完毕后，返回下载缓存每个字幕的位置（通用的下载逻辑，前面把常规（没有媒体服务器模式）和 Emby 这样的模式都转换到想到的下载接口上
 func (d *SubSupplierHub) DownloadSub4Series(seriesDirPath string, seriesInfo *series.SeriesInfo, index int64) (map[string][]string, error) {
+	return d.DownloadSub4SeriesContext(context.Background(), seriesDirPath, seriesInfo, index)
+}
 
-	organizeSubFiles, err := d.dlSubFromSeriesInfo(seriesDirPath, index, seriesInfo)
+func (d *SubSupplierHub) DownloadSub4SeriesContext(ctx context.Context, seriesDirPath string, seriesInfo *series.SeriesInfo, index int64) (map[string][]string, error) {
+	organizeSubFiles, err := d.dlSubFromSeriesInfo(ctx, seriesDirPath, index, seriesInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -263,14 +278,21 @@ func (d *SubSupplierHub) CheckSubSiteStatus() backend.ReplyCheckStatus {
 	return outStatus
 }
 
-func (d *SubSupplierHub) dlSubFromSeriesInfo(seriesDirPath string, index int64, seriesInfo *series.SeriesInfo) (map[string][]string, error) {
+func (d *SubSupplierHub) dlSubFromSeriesInfo(ctx context.Context, seriesDirPath string, index int64, seriesInfo *series.SeriesInfo) (map[string][]string, error) {
 	// 下载好的字幕
-	subInfos := seriesHelper.DownloadSubtitleInAllSiteByOneSeries(d.log, d.Suppliers, seriesInfo, index)
+	subInfos, searchErr := seriesHelper.DownloadSubtitleInAllSiteByOneSeriesContext(ctx, d.log, d.Suppliers, seriesInfo, index,
+		settings.Get().AdvancedSettings.SaveMultiSub)
+	if searchErr != nil && len(subInfos) == 0 {
+		return nil, searchErr
+	}
 	// 整理字幕，比如解压什么的
 	// 每一集 SxEx - 对应解压整理后的字幕列表
 
 	if len(subInfos) < 1 {
 		d.log.Warningln("DownloadSubtitleInAllSiteByOneSeries.subInfos == 0, No Sub Downloaded.")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	organizeSubFiles, err := sub_helper.OrganizeDlSubFiles(d.log, filepath.Base(seriesDirPath), subInfos, false)

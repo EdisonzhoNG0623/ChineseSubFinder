@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"runtime/debug"
+	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/task_queue"
 	common2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 	taskQueue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
+	"golang.org/x/net/context"
 )
 
 type queueWorkerPanic struct {
@@ -268,6 +270,9 @@ func (d *Downloader) queueDownloaderLocal() {
 	defer endQueueLog()
 
 	downloadCounter := d.queueDownloadCounter.Add(1)
+	jobCtx, cancelJob := context.WithTimeout(d.ctx,
+		time.Duration(settings.Get().AdvancedSettings.TaskQueue.OneJobTimeOut)*time.Second)
+	defer cancelJob()
 	// 创建一个 chan 用于任务的中断和超时
 	done := make(chan interface{}, 1)
 	// 接收内部任务的 panic
@@ -287,11 +292,11 @@ func (d *Downloader) queueDownloaderLocal() {
 		if oneJob.VideoType == common2.Movie {
 			// 电影
 			// 具体的下载逻辑 func()
-			done <- d.movieDlFunc(d.ctx, oneJob, downloadCounter)
+			done <- d.movieDlFunc(jobCtx, oneJob, downloadCounter)
 		} else if oneJob.VideoType == common2.Series {
 			// 连续剧
 			// 具体的下载逻辑 func()
-			done <- d.seriesDlFunc(d.ctx, oneJob, downloadCounter)
+			done <- d.seriesDlFunc(jobCtx, oneJob, downloadCounter)
 		} else {
 			d.log.Errorln("oneJob.VideoType not support, oneJob.VideoType = ", oneJob.VideoType)
 			done <- nil

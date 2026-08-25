@@ -3,16 +3,14 @@ package series_helper
 import (
 	"context"
 	"path/filepath"
-	"runtime/debug"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ai_ambiguity"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/supplier_search"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/search"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_candidate"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
@@ -184,6 +182,11 @@ func SkipChineseSeries(dealers *media_info_dealers.Dealers, seriesRootPath strin
 
 // DownloadSubtitleInAllSiteByOneSeries 一部连续剧，在所有的网站，下载相应的字幕
 func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifaces.ISupplier, seriesInfo *series.SeriesInfo, i int64) []supplier.SubInfo {
+	subInfos, _ := DownloadSubtitleInAllSiteByOneSeriesContext(context.Background(), logger, Suppliers, seriesInfo, i, false)
+	return subInfos
+}
+
+func DownloadSubtitleInAllSiteByOneSeriesContext(ctx context.Context, logger *logrus.Logger, Suppliers []ifaces.ISupplier, seriesInfo *series.SeriesInfo, i int64, requireAllSuppliers bool) ([]supplier.SubInfo, error) {
 
 	defer func() {
 		logger.Infoln(common.QueueName, i, "DlSub End", seriesInfo.DirPath)
@@ -194,59 +197,12 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 	if err := enrichSeriesEpisodeNumbering(logger, seriesInfo); err != nil {
 		logger.Debugln("anime absolute numbering unavailable:", err)
 	}
-	var outSUbInfos = make([]supplier.SubInfo, 0)
-	var outMu sync.Mutex
-	var supplierWorkers sync.WaitGroup
 	if len(seriesInfo.NeedDlEpsKeyList) < 1 {
-		return outSUbInfos
+		return []supplier.SubInfo{}, nil
 	}
 	for key := range seriesInfo.NeedDlEpsKeyList {
 		logger.Infoln(common.QueueName, i, "NeedDownloadEps", "-", key)
 	}
-
-	for _, oneSupplier := range Suppliers {
-		oneSupplier := oneSupplier
-		supplierWorkers.Add(1)
-
-		oneSupplierFunc := func() {
-			defer supplierWorkers.Done()
-			defer func() {
-				logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), "End")
-				logger.Infoln("------------------------------------------")
-				if recovered := recover(); recovered != nil {
-					logger.Errorf("%s %d %s supplier panic: %v\n%s", common.QueueName, i,
-						oneSupplier.GetSupplierName(), recovered, debug.Stack())
-				}
-			}()
-
-			var subInfos []supplier.SubInfo
-			logger.Infoln("------------------------------------------")
-			logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), "Start...")
-
-			if oneSupplier.OverDailyDownloadLimit() == true {
-				logger.Infoln(common.QueueName, i, oneSupplier.GetSupplierName(), "Over Daily Download Limit")
-				return
-			}
-
-			// 一次性把这一部连续剧的所有字幕下载完
-			startedAt := time.Now()
-			subInfos, err := oneSupplier.GetSubListFromFile4Series(seriesInfo)
-			subtitle_metrics.RecordAttempt(oneSupplier.GetSupplierName(), time.Since(startedAt), len(subInfos), err)
-			if err != nil {
-				logger.Errorln(common.QueueName, i, oneSupplier.GetSupplierName(), "GetSubListFromFile4Series", err)
-				return
-			}
-			// 把后缀名给改好
-			sub_helper.ChangeVideoExt2SubExt(subInfos)
-
-			outMu.Lock()
-			outSUbInfos = append(outSUbInfos, subInfos...)
-			outMu.Unlock()
-		}
-
-		go oneSupplierFunc()
-	}
-	supplierWorkers.Wait()
 
 	target := subtitle_candidate.Target{Titles: []string{seriesInfo.Name}}
 	for _, episode := range seriesInfo.NeedDlEpsKeyList {
@@ -254,13 +210,29 @@ func DownloadSubtitleInAllSiteByOneSeries(logger *logrus.Logger, Suppliers []ifa
 			Season: episode.Season, Episode: episode.Episode, AbsoluteEpisode: episode.AbsoluteEpisode,
 		})
 	}
+	fastEnough := func(items []supplier.SubInfo) bool {
+		if requireAllSuppliers {
+			return false
+		}
+		ranked := subtitle_candidate.Rank(items, target)
+		return len(ranked) > 0 && ranked[0].Score >= 700
+	}
+	outSUbInfos, searchErr := supplier_search.Run(ctx, logger, Suppliers, supplier_search.NewSearchID("series"), fastEnough,
+		func(oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
+			subInfos, err := oneSupplier.GetSubListFromFile4Series(seriesInfo)
+			sub_helper.ChangeVideoExt2SubExt(subInfos)
+			return subInfos, err
+		})
+	if searchErr != nil {
+		logger.WithError(searchErr).Warn("series supplier search stopped")
+	}
 	var decisionErr error
-	outSUbInfos, _, decisionErr = subtitle_candidate.RankWithAmbiguityResolver(context.Background(), outSUbInfos, target, ai_ambiguity.ConfiguredResolver())
+	outSUbInfos, _, decisionErr = subtitle_candidate.RankWithAmbiguityResolver(ctx, outSUbInfos, target, ai_ambiguity.ConfiguredResolver())
 	if decisionErr != nil {
 		logger.Warningln("AI ambiguity resolver abstained", decisionErr)
 	}
 
-	return outSUbInfos
+	return outSUbInfos, searchErr
 }
 
 // GetSeriesListFromDirs 获取这个目录下的所有文件夹名称，默认为一个连续剧的目录的List

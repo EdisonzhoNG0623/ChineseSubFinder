@@ -24,6 +24,11 @@ type SupplierDiagnostic struct {
 	Candidates        int64     `json:"candidates"`
 	LastAttemptAt     time.Time `json:"last_attempt_at,omitempty"`
 	LastAttemptMillis int64     `json:"last_attempt_millis"`
+	AverageAttemptMs  int64     `json:"average_attempt_millis"`
+	P95AttemptMs      int64     `json:"p95_attempt_millis"`
+	Timeouts          int64     `json:"timeouts"`
+	CircuitSkips      int64     `json:"circuit_skips"`
+	CircuitOpenUntil  time.Time `json:"circuit_open_until,omitempty"`
 }
 
 type ReplySupplierDiagnostics struct {

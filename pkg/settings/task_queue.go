@@ -2,6 +2,7 @@ package settings
 
 type TaskQueue struct {
 	MaxRetryTimes           int    `json:"max_retry_times" default:"3"`            // 单个任务失败后，最大重试次数，超过后会降一级
+	DownloadConcurrency     int    `json:"download_concurrency" default:"2"`       // 同时处理的字幕下载任务数
 	OneJobTimeOut           int    `json:"one_job_time_out" default:"300"`         // 单个任务的超时时间 5 * 60 s
 	Interval                int    `json:"interval" default:"10"`                  // 任务的间隔，单位 s，这里会有一个限制，不允许太快,然后会做一定的随机时间范围，当前值 x ~ 2*x 之内随机
 	ExpirationTime          int    `json:"expiration_time"  default:"90"`          // 单位天。1. 一个视频的 CreatedTime 在这个时间范围内，都会被下载字幕（除非已经观看跳过启用了）。2. 如果下载失败的任务，AddTime 超过了这个时间，那么就标记为 Failed
@@ -13,6 +14,7 @@ type TaskQueue struct {
 func NewTaskQueue() *TaskQueue {
 	return &TaskQueue{
 		MaxRetryTimes:           3,
+		DownloadConcurrency:     2,
 		OneJobTimeOut:           300,
 		Interval:                10,
 		ExpirationTime:          90,
@@ -25,6 +27,9 @@ func NewTaskQueue() *TaskQueue {
 func (t *TaskQueue) Check() {
 	if t.MaxRetryTimes < 1 || t.MaxRetryTimes > 5 {
 		t.MaxRetryTimes = 3
+	}
+	if t.DownloadConcurrency < 1 || t.DownloadConcurrency > 4 {
+		t.DownloadConcurrency = 2
 	}
 	if t.OneJobTimeOut < 300 || t.OneJobTimeOut > 600 {
 		t.OneJobTimeOut = 300
