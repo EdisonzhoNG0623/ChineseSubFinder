@@ -19,6 +19,7 @@ type collectionBackfillReport struct {
 	SkippedExisting int
 	Saved           int
 	QueueMarked     int
+	SatisfiedKeys   map[string]struct{}
 }
 
 // backfillSeriesCollection fans a cached multi-episode archive out to every
@@ -41,6 +42,7 @@ func (d *Downloader) backfillSeriesCollection(ctx context.Context, job taskQueue
 	}
 	report.Available = len(candidates)
 	report.SkippedExisting = skippedExisting
+	report.SatisfiedKeys = satisfiedEpisodeKeys
 
 	d.log.Infof("Collection cache fan-out start: series=%q cached_episodes=%d candidates=%d skipped_existing=%d",
 		filepath.Base(job.SeriesRootDirPath), countCollectionEpisodes(organizeSubFiles), len(candidates), skippedExisting)

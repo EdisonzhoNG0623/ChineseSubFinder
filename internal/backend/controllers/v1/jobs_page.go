@@ -147,6 +147,8 @@ func summarizeJobs(jobs []taskQueueTypes.OneJob, now time.Time) backendTypes.Que
 	summary := backendTypes.QueueSummary{
 		ByStatus: make(map[string]int), ByVideoType: make(map[string]int), ByErrorCategory: make(map[string]int),
 	}
+	seriesGroups := make(map[string]int)
+	readySeriesGroups := make(map[string]int)
 	for _, job := range jobs {
 		summary.Total++
 		summary.ByStatus[job.JobStatus.String()]++
@@ -156,8 +158,23 @@ func summarizeJobs(jobs []taskQueueTypes.OneJob, now time.Time) backendTypes.Que
 		if diagnostic.IsScheduled {
 			summary.RetryScheduled++
 		}
-		if job.JobStatus == taskQueueTypes.Waiting && (!diagnostic.IsScheduled || diagnostic.IsReady || diagnostic.IsForced) {
+		ready := job.JobStatus == taskQueueTypes.Waiting && (!diagnostic.IsScheduled || diagnostic.IsReady || diagnostic.IsForced)
+		if ready {
 			summary.ReadyNow++
+		}
+		if job.JobStatus == taskQueueTypes.Waiting && job.SeriesRootDirPath != "" && job.Season > 0 {
+			summary.WaitingSeries++
+			group := job.SeriesRootDirPath + "\x00" + strconv.Itoa(job.Season)
+			seriesGroups[group]++
+			if ready {
+				readySeriesGroups[group]++
+			}
+		}
+	}
+	summary.SeriesGroups = len(seriesGroups)
+	for _, count := range readySeriesGroups {
+		if count > 1 {
+			summary.BatchableGroups++
 		}
 	}
 	return summary

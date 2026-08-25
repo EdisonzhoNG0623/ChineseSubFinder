@@ -249,6 +249,15 @@ func (d *Downloader) queueDownloaderLocal() {
 			}
 		}
 	}
+	seriesBatch := []taskQueue2.OneJob{oneJob}
+	if oneJob.VideoType == common2.Series {
+		seriesBatch = d.readySeriesBatch(oneJob)
+		if len(seriesBatch) > 1 {
+			d.log.WithFields(map[string]interface{}{
+				"event": "series_batch_claimed", "batch_size": len(seriesBatch), "season": oneJob.Season,
+			}).Info("ready series episodes coalesced")
+		}
+	}
 	// 取出来后，需要标记为正在下载
 	oneJob.JobStatus = taskQueue2.Downloading
 	oneJob.ForceRun = false
@@ -261,6 +270,7 @@ func (d *Downloader) queueDownloaderLocal() {
 		d.log.Errorln("d.downloadQueue.Update() Failed")
 		return
 	}
+	seriesBatch[0] = oneJob
 	unregisterSeries := d.registerSeriesWorker(oneJob.SeriesRootDirPath)
 	defer unregisterSeries()
 	didWork = true
@@ -296,7 +306,7 @@ func (d *Downloader) queueDownloaderLocal() {
 		} else if oneJob.VideoType == common2.Series {
 			// 连续剧
 			// 具体的下载逻辑 func()
-			done <- d.seriesDlFunc(jobCtx, oneJob, downloadCounter)
+			done <- d.seriesDlFuncBatch(jobCtx, oneJob, seriesBatch, downloadCounter)
 		} else {
 			d.log.Errorln("oneJob.VideoType not support, oneJob.VideoType = ", oneJob.VideoType)
 			done <- nil

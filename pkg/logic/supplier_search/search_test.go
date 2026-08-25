@@ -124,7 +124,7 @@ func TestTimeoutForSupplierTier(t *testing.T) {
 		name, phase string
 		want        time.Duration
 	}{
-		{name: "xunlei", phase: "fast", want: 20 * time.Second},
+		{name: "xunlei", phase: "fast", want: 10 * time.Second},
 		{name: "assrt", phase: "slow", want: 180 * time.Second},
 		{name: "subtitle_best", phase: "slow", want: 30 * time.Second},
 		{name: "subhd", phase: "slow", want: 60 * time.Second},
@@ -133,5 +133,25 @@ func TestTimeoutForSupplierTier(t *testing.T) {
 		if got := timeoutFor(test.name, test.phase); got != test.want {
 			t.Errorf("timeoutFor(%q, %q) = %s, want %s", test.name, test.phase, got, test.want)
 		}
+	}
+}
+
+func TestRunReturnsAfterStrongSlowResultWithoutWaitingForEverySupplier(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	started := make(chan string, 2)
+	sources := []ifaces.ISupplier{
+		&searchSupplier{name: "subhd", started: started, items: []supplier.SubInfo{{Name: "strong"}}},
+		&searchSupplier{name: "assrt", started: started, release: release},
+	}
+	startedAt := time.Now()
+	got, err := Run(context.Background(), log_helper.GetLogger4Tester(), sources, "test-progressive", func(items []supplier.SubInfo) bool {
+		return len(items) > 0
+	}, movieQuery)
+	if err != nil || len(got) != 1 || time.Since(startedAt) > time.Second {
+		t.Fatalf("progressive slow tier did not stop promptly: items=%d elapsed=%s err=%v", len(got), time.Since(startedAt), err)
+	}
+	if first := <-started; first != "subhd" {
+		t.Fatalf("first slow supplier = %q, want subhd", first)
 	}
 }

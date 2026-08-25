@@ -31,9 +31,43 @@ type SupplierRuntime struct {
 	AttemptBuckets      [6]int64  `json:"attempt_buckets"`
 	Timeouts            int64     `json:"timeouts"`
 	CircuitSkips        int64     `json:"circuit_skips"`
+	Selections          int64     `json:"selections"`
+	Saves               int64     `json:"saves"`
+	CacheHits           int64     `json:"cache_hits"`
+	EarlyStops          int64     `json:"early_stops"`
 	ConsecutiveErrors   int64     `json:"consecutive_errors"`
 	ConsecutiveTimeouts int64     `json:"consecutive_timeouts"`
 	CircuitOpenUntil    time.Time `json:"circuit_open_until,omitempty"`
+}
+
+func RecordSelection(name string) {
+	recordCounter(name, func(record *SupplierRuntime) { record.Selections++ })
+}
+
+func RecordSave(name string) {
+	recordCounter(name, func(record *SupplierRuntime) { record.Saves++ })
+}
+
+func RecordCacheHit(name string) {
+	recordCounter(name, func(record *SupplierRuntime) { record.CacheHits++ })
+}
+
+func RecordEarlyStop(name string) {
+	recordCounter(name, func(record *SupplierRuntime) { record.EarlyStops++ })
+}
+
+func recordCounter(name string, update func(*SupplierRuntime)) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	processRegistry.mu.Lock()
+	record := processRegistry.suppliers[name]
+	record.Name = name
+	update(&record)
+	processRegistry.suppliers[name] = record
+	processRegistry.mu.Unlock()
+	processRegistry.schedulePersistence()
 }
 
 func (s SupplierRuntime) AverageAttemptMillis() int64 {

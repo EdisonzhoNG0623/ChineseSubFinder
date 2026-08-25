@@ -80,8 +80,14 @@
         <template #body-cell-hit="{ row }">
           <q-td>
             <div>{{ row.candidate_hits }} 次命中 · {{ row.candidates }} 个候选</div>
+            <div class="text-caption text-positive">
+              选中 {{ row.selections || 0 }} 次 · 保存 {{ row.saves || 0 }} 次 · 转化 {{ conversionText(row) }}
+            </div>
             <div class="text-caption text-grey-7">
               {{ row.empty_results }} 次空结果 / {{ row.errors }} 次错误 / {{ row.timeouts }} 次超时
+            </div>
+            <div v-if="row.cache_hits || row.early_stops" class="text-caption text-primary">
+              缓存命中 {{ row.cache_hits || 0 }} 次 · 强匹配提前结束 {{ row.early_stops || 0 }} 次
             </div>
             <div v-if="row.circuit_skips" class="text-caption text-warning">
               熔断已跳过 {{ row.circuit_skips }} 次
@@ -106,7 +112,7 @@
       </q-table>
     </q-card>
     <div class="text-caption text-grey-7 q-mt-sm">
-      数据每 20 秒刷新。命中、耗时和熔断聚合统计会持久化；不记录媒体路径、候选名称、错误正文或密钥。
+      数据每 20 秒刷新。命中、选中、保存、缓存、耗时和熔断聚合统计会持久化；不记录媒体路径、候选名称、错误正文或密钥。
     </div>
   </q-page>
 </template>
@@ -154,7 +160,11 @@ const headline = computed(() => [
     value: rows.value.filter((item) => ['DEGRADED', 'UNHEALTHY', 'RETIRED'].includes(item.health)).length,
     className: 'text-warning',
   },
-  { label: '候选命中', value: rows.value.reduce((sum, item) => sum + item.candidate_hits, 0) },
+  {
+    label: '实际保存',
+    value: rows.value.reduce((sum, item) => sum + (item.saves || 0), 0),
+    className: 'text-positive',
+  },
 ]);
 const usageRatio = (row) => Math.min(1, row.daily_limit > 0 ? row.daily_used / row.daily_limit : 0);
 const usageText = (row) =>
@@ -163,6 +173,10 @@ const formatDuration = (millis) => {
   if (!millis) return '—';
   if (millis < 1000) return `${millis} ms`;
   return `${(millis / 1000).toFixed(millis < 10000 ? 1 : 0)} s`;
+};
+const conversionText = (row) => {
+  if (!row.selections) return '—';
+  return `${Math.round(((row.saves || 0) / row.selections) * 100)}%`;
 };
 
 const load = async (silent = false) => {

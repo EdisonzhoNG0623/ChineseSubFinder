@@ -21,6 +21,19 @@ func TestRegistryStoresOnlyAggregateOutcome(t *testing.T) {
 	}
 }
 
+func TestRegistryTracksSelectionAndSaveConversion(t *testing.T) {
+	name := "test-save-conversion"
+	RecordSelection(name)
+	RecordSelection(name)
+	RecordSave(name)
+	RecordCacheHit(name)
+	RecordEarlyStop(name)
+	got := Snapshot()[name]
+	if got.Selections != 2 || got.Saves != 1 || got.CacheHits != 1 || got.EarlyStops != 1 {
+		t.Fatalf("unexpected conversion metrics: %+v", got)
+	}
+}
+
 func TestRegistryTracksLatencyTimeoutAndCircuit(t *testing.T) {
 	name := "test-timeout-circuit"
 	RecordAttempt(name, 1500*time.Millisecond, 0, context.DeadlineExceeded)

@@ -1,6 +1,11 @@
 package subhd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,16 +31,29 @@ type subHDListCacheEntry struct {
 }
 
 type subHDSearchCache struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	details map[string]subHDDetailCacheEntry
-	lists   map[string]subHDListCacheEntry
+	mu           sync.Mutex
+	now          func() time.Time
+	details      map[string]subHDDetailCacheEntry
+	lists        map[string]subHDListCacheEntry
+	negativePath string
+	negative     map[string]time.Time
 }
 
-func newSubHDSearchCache() *subHDSearchCache {
-	return &subHDSearchCache{
+type persistedSubHDNegativeCache struct {
+	Version int                  `json:"version"`
+	Entries map[string]time.Time `json:"entries"`
+}
+
+func newSubHDSearchCache(persistencePath ...string) *subHDSearchCache {
+	cache := &subHDSearchCache{
 		now: time.Now, details: make(map[string]subHDDetailCacheEntry), lists: make(map[string]subHDListCacheEntry),
+		negative: make(map[string]time.Time),
 	}
+	if len(persistencePath) > 0 {
+		cache.negativePath = persistencePath[0]
+		cache.loadNegative()
+	}
+	return cache
 }
 
 func normalizeSubHDCacheKey(value string) string {
@@ -54,14 +72,23 @@ func (c *subHDSearchCache) getDetail(key string) (string, bool) {
 	defer c.mu.Unlock()
 	key = normalizeSubHDCacheKey(key)
 	entry, ok := c.details[key]
+	if ok {
+		if !entry.expiresAt.After(c.now()) {
+			delete(c.details, key)
+			return "", false
+		}
+		return entry.url, true
+	}
+	hash := subHDCacheKeyHash(key)
+	expiresAt, ok := c.negative[hash]
 	if !ok {
 		return "", false
 	}
-	if !entry.expiresAt.After(c.now()) {
-		delete(c.details, key)
+	if !expiresAt.After(c.now()) {
+		delete(c.negative, hash)
 		return "", false
 	}
-	return entry.url, true
+	return "", true
 }
 
 func (c *subHDSearchCache) putDetail(key, detailURL string) {
@@ -75,10 +102,72 @@ func (c *subHDSearchCache) putDetail(key, detailURL string) {
 	if detailURL == "" {
 		ttl = subHDNegativeCacheTTL
 	}
-	c.details[normalizeSubHDCacheKey(key)] = subHDDetailCacheEntry{
+	key = normalizeSubHDCacheKey(key)
+	c.details[key] = subHDDetailCacheEntry{
 		url: detailURL, storedAt: now, expiresAt: now.Add(ttl),
 	}
+	if detailURL == "" {
+		c.negative[subHDCacheKeyHash(key)] = now.Add(ttl)
+		c.evictNegative()
+		c.persistNegative()
+	} else if _, found := c.negative[subHDCacheKeyHash(key)]; found {
+		delete(c.negative, subHDCacheKeyHash(key))
+		c.persistNegative()
+	}
 	c.evictDetails()
+}
+
+func subHDCacheKeyHash(key string) string {
+	sum := sha256.Sum256([]byte(normalizeSubHDCacheKey(key)))
+	return hex.EncodeToString(sum[:])
+}
+
+func (c *subHDSearchCache) loadNegative() {
+	if c.negativePath == "" {
+		return
+	}
+	data, err := os.ReadFile(c.negativePath)
+	if err != nil {
+		return
+	}
+	state := persistedSubHDNegativeCache{}
+	if json.Unmarshal(data, &state) != nil || state.Version != 1 {
+		return
+	}
+	now := c.now()
+	for key, expiresAt := range state.Entries {
+		if len(c.negative) >= subHDSearchCacheLimit {
+			break
+		}
+		if expiresAt.After(now) {
+			c.negative[key] = expiresAt
+		}
+	}
+}
+
+func (c *subHDSearchCache) persistNegative() {
+	if c.negativePath == "" {
+		return
+	}
+	data, err := json.Marshal(persistedSubHDNegativeCache{Version: 1, Entries: c.negative})
+	if err != nil || os.MkdirAll(filepath.Dir(c.negativePath), 0o755) != nil {
+		return
+	}
+	temp, err := os.CreateTemp(filepath.Dir(c.negativePath), ".subhd-negative-*")
+	if err != nil {
+		return
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err = temp.Chmod(0o600); err == nil {
+		_, err = temp.Write(data)
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		_ = os.Rename(tempPath, c.negativePath)
+	}
 }
 
 func (c *subHDSearchCache) getList(key string) ([]HdListItem, bool) {
@@ -139,5 +228,18 @@ func (c *subHDSearchCache) evictLists() {
 			}
 		}
 		delete(c.lists, oldestKey)
+	}
+}
+
+func (c *subHDSearchCache) evictNegative() {
+	for len(c.negative) > subHDSearchCacheLimit {
+		oldestKey := ""
+		var earliestExpiry time.Time
+		for key, expiresAt := range c.negative {
+			if oldestKey == "" || expiresAt.Before(earliestExpiry) {
+				oldestKey, earliestExpiry = key, expiresAt
+			}
+		}
+		delete(c.negative, oldestKey)
 	}
 }

@@ -82,16 +82,21 @@ func (d *Downloader) movieDlFunc(ctx context.Context, job taskQueue2.OneJob, dow
 }
 
 func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, downloadIndex int64) error {
+	return d.seriesDlFuncBatch(ctx, job, []taskQueue2.OneJob{job}, downloadIndex)
+}
+
+func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJob, batchJobs []taskQueue2.OneJob, downloadIndex int64) error {
 
 	nowSubSupplierHub := d.getSubSupplierHub()
 	if nowSubSupplierHub == nil || nowSubSupplierHub.Suppliers == nil || len(nowSubSupplierHub.Suppliers) < 1 {
-		d.log.Infoln("Wait SupplierCheck Update *subSupplierHub, movieDlFunc Skip this time")
+		d.log.Infoln("Wait SupplierCheck Update *subSupplierHub, seriesDlFunc Skip this time")
 		return nil
 	}
+	if len(batchJobs) == 0 {
+		batchJobs = []taskQueue2.OneJob{job}
+	}
 	var err error
-	// 设置只有一集需要下载
-	epsMap := make(map[int][]int, 0)
-	epsMap[job.Season] = []int{job.Episode}
+	epsMap := buildSeriesEpisodeMap(batchJobs)
 	// 这里拿到了这一部连续剧的所有的剧集信息，以及所有下载到的字幕信息
 	seriesInfo, err := series_helper.ReadSeriesInfoFromDir(
 		d.fileDownloader.MediaInfoDealers, job.SeriesRootDirPath,
@@ -101,9 +106,47 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 		epsMap)
 	if err != nil {
 		err = errors.New(fmt.Sprintf("seriesDlFunc.ReadSeriesInfoFromDir, Error: %v", err))
-		d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
+		d.completeSeriesBatch(batchJobs, nil, nil, err)
 		return err
 	}
+	primaryEpisodeKey := pkg.GetEpisodeKeyName(job.Season, job.Episode)
+	if _, stillNeeded := seriesInfo.NeedDlEpsKeyList[primaryEpisodeKey]; !stillNeeded {
+		job.JobStatus = taskQueue2.Ignore
+		job.ErrorInfo = ""
+		job.ForceRun = false
+		updated, updateErr := d.downloadQueue.Update(job)
+		if updateErr != nil {
+			return fmt.Errorf("seriesDlFunc.IgnoreSatisfiedPrimary: %w", updateErr)
+		}
+		if !updated {
+			return errors.New("seriesDlFunc.IgnoreSatisfiedPrimary: queue job not found")
+		}
+		return nil
+	}
+	activeBatch := make([]taskQueue2.OneJob, 0, len(batchJobs))
+	for _, batchJob := range batchJobs {
+		key := pkg.GetEpisodeKeyName(batchJob.Season, batchJob.Episode)
+		if _, stillNeeded := seriesInfo.NeedDlEpsKeyList[key]; stillNeeded {
+			activeBatch = append(activeBatch, batchJob)
+			continue
+		}
+		batchJob.JobStatus = taskQueue2.Ignore
+		batchJob.ErrorInfo = ""
+		batchJob.ForceRun = false
+		updated, updateErr := d.downloadQueue.Update(batchJob)
+		if updateErr != nil {
+			err = fmt.Errorf("seriesDlFunc.IgnoreSatisfiedCompanion: %w", updateErr)
+			d.completeSeriesBatch(activeBatch, nil, nil, err)
+			return err
+		}
+		if !updated {
+			err = errors.New("seriesDlFunc.IgnoreSatisfiedCompanion: queue job not found")
+			d.completeSeriesBatch(activeBatch, nil, nil, err)
+			return err
+		}
+	}
+	batchJobs = activeBatch
+	seriesInfo.PrimaryEpisodeKey = primaryEpisodeKey
 	// 下载好的字幕文件
 	var organizeSubFiles map[string][]string
 	// 下载的接口是统一的
@@ -111,37 +154,34 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 		seriesInfo,
 		downloadIndex)
 	// DownloadSub4Series enriches alternate anime numbering before suppliers
-	// run. Persist it after that enrichment so the queue API can explain the
-	// exact aired/scene/absolute fallback plan on later attempts.
-	if episode, found := seriesInfo.NeedDlEpsKeyList[pkg.GetEpisodeKeyName(job.Season, job.Episode)]; found {
-		job.AbsoluteEpisode = episode.AbsoluteEpisode
-		job.SceneSeason = episode.SceneSeason
-		job.SceneEpisode = episode.SceneEpisode
-		job.NumberingSource = episode.NumberingSource
-		job.NumberingConfidence = episode.NumberingConfidence
-		job.SeriesName = seriesInfo.Name
-		if _, updateErr := d.downloadQueue.Update(job); updateErr != nil {
-			d.log.Warningln("seriesDlFunc.UpdateEpisodeIdentity", updateErr)
+	// run. Persist that identity with each batched queue outcome.
+	identities := make(map[string]seriesIdentity, len(seriesInfo.NeedDlEpsKeyList))
+	for key, episode := range seriesInfo.NeedDlEpsKeyList {
+		identities[key] = seriesIdentity{
+			absoluteEpisode:     episode.AbsoluteEpisode,
+			sceneSeason:         episode.SceneSeason,
+			sceneEpisode:        episode.SceneEpisode,
+			numberingSource:     episode.NumberingSource,
+			numberingConfidence: episode.NumberingConfidence,
+			seriesName:          seriesInfo.Name,
 		}
 	}
+	batchJobs = enrichSeriesBatchJobs(batchJobs, identities)
 	if err != nil {
 		err = errors.New(fmt.Sprintf("seriesDlFunc.DownloadSub4Series %v S%vE%v %v", filepath.Base(job.SeriesRootDirPath), job.Season, job.Episode, err))
-		d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
+		d.completeSeriesBatch(batchJobs, nil, nil, err)
 		return err
 	}
 	// 是否下载到字幕了
 	if organizeSubFiles == nil || len(organizeSubFiles) < 1 {
 		d.log.Infoln(task_queue.ErrNoSubFound.Error(), filepath.Base(job.VideoFPath), job.Season, job.Episode)
-		d.downloadQueue.AutoDetectUpdateJobStatus(job, task_queue.ErrNoSubFound)
+		d.completeSeriesBatch(batchJobs, nil, nil, task_queue.ErrNoSubFound)
 		return nil
 	}
 
-	var errSave2Local error
-	save2LocalSubCount := 0
-	requestedEpisodeSaved := false
-	requestedEpisodeKey := pkg.GetEpisodeKeyName(job.Season, job.Episode)
+	savedEpisodes := make(map[string]struct{})
+	saveErrors := make(map[string]error)
 	// 只针对需要下载字幕的视频进行字幕的选择保存
-	subVideoCount := 0
 	for epsKey, episodeInfo := range seriesInfo.NeedDlEpsKeyList {
 		saveErr := runSubtitleSaveWithContext(ctx, func() error {
 			return d.oneVideoSelectBestSub(episodeInfo.FileFullPath, organizeSubFiles[epsKey])
@@ -149,20 +189,15 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 		if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) {
 			err = fmt.Errorf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d: %w",
 				seriesInfo.Name, episodeInfo.Season, episodeInfo.Episode, saveErr)
-			d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
+			d.completeSeriesBatch(batchJobs, savedEpisodes, saveErrors, err)
 			return err
 		}
 		if saveErr != nil {
-			errSave2Local = saveErr
+			saveErrors[epsKey] = saveErr
 			d.log.Errorln(saveErr)
 		} else {
-			save2LocalSubCount++
-			if epsKey == requestedEpisodeKey {
-				requestedEpisodeSaved = true
-			}
+			savedEpisodes[epsKey] = struct{}{}
 		}
-
-		subVideoCount++
 	}
 	// A multi-episode archive is already persisted in FileDownloader's shared
 	// cache. Fan its extracted episode files out now so queued episodes do not
@@ -176,6 +211,9 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 	if backfillReport.Saved > 0 {
 		d.log.Infof("seriesDlFunc collection cache backfilled %d episodes and completed %d queued jobs",
 			backfillReport.Saved, backfillReport.QueueMarked)
+	}
+	for episodeKey := range backfillReport.SatisfiedKeys {
+		savedEpisodes[episodeKey] = struct{}{}
 	}
 	// 这里会拿到一份季度字幕的列表比如，Key 是 S1E0 S2E0 S3E0，value 是新的存储位置
 	fullSeasonSubDict := d.saveFullSeasonSub(seriesInfo, organizeSubFiles)
@@ -201,17 +239,14 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 		if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) {
 			err = fmt.Errorf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d: %w",
 				seriesInfo.Name, episodeInfo.Season, episodeInfo.Episode, saveErr)
-			d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
+			d.completeSeriesBatch(batchJobs, savedEpisodes, saveErrors, err)
 			return err
 		}
 		if saveErr != nil {
-			errSave2Local = saveErr
+			saveErrors[seasonEpsKey] = saveErr
 			d.log.Errorln(saveErr)
 		} else {
-			save2LocalSubCount++
-			if episodeInfo.Season == job.Season && episodeInfo.Episode == job.Episode {
-				requestedEpisodeSaved = true
-			}
+			savedEpisodes[seasonEpsKey] = struct{}{}
 		}
 	}
 	// 是否清理全季的缓存字幕文件夹
@@ -222,15 +257,10 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 		}
 	}
 
-	if !requestedEpisodeSaved {
-		// A collection may save subtitles for sibling episodes. That must not mark
-		// the explicitly queued episode Done when its own subtitle is still absent.
-		errSave2Local = seriesRequestedEpisodeOutcome(false, errSave2Local)
-		d.downloadQueue.AutoDetectUpdateJobStatus(job, errSave2Local)
-		return errSave2Local
+	primaryErr := d.completeSeriesBatch(batchJobs, savedEpisodes, saveErrors, task_queue.ErrNoSubFound)
+	if primaryErr != nil {
+		return primaryErr
 	}
-	// 哪怕有一个写入到本地成功了，也无需对本次任务报错
-	d.downloadQueue.AutoDetectUpdateJobStatus(job, nil)
 	// TODO 刷新字幕，这里是 Emby 的，如果是其他的，需要再对接对应的媒体服务器
 	if settings.Get().EmbySettings.Enable == true && d.embyHelper != nil {
 

@@ -2,9 +2,13 @@ package subhd
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 	"github.com/go-rod/rod"
 )
 
@@ -12,7 +16,7 @@ var errSubHDSearchBlocked = errors.New("subhd search page blocked by site verifi
 
 func (s *Supplier) ensureSearchCache() *subHDSearchCache {
 	s.cacheInitOnce.Do(func() {
-		s.searchCache = newSubHDSearchCache()
+		s.searchCache = newSubHDSearchCache(filepath.Join(pkg.GetConfigRootDirFPath(), "cache", "subhd_negative_cache.json"))
 	})
 	return s.searchCache
 }
@@ -20,10 +24,11 @@ func (s *Supplier) ensureSearchCache() *subHDSearchCache {
 func (s *Supplier) cachedStep0(browser *rod.Browser, query subHDSearchQuery) (string, error) {
 	cacheKey := settings.Get().AdvancedSettings.SuppliersSettings.SubHD.RootUrl + "|" + query.Keyword
 	if detailURL, ok := s.ensureSearchCache().getDetail(cacheKey); ok {
+		subtitle_metrics.RecordCacheHit(common.SubSiteSubHd)
 		if detailURL == "" {
-			s.log.Debugf("subhd search cache hit kind=negative query_kind=%s keyword=%q", query.Kind, query.Keyword)
+			s.log.Debugf("subhd search cache hit kind=negative query_kind=%s", query.Kind)
 		} else {
-			s.log.Debugf("subhd search cache hit kind=positive query_kind=%s keyword=%q", query.Kind, query.Keyword)
+			s.log.Debugf("subhd search cache hit kind=positive query_kind=%s", query.Kind)
 		}
 		return detailURL, nil
 	}
@@ -35,7 +40,7 @@ func (s *Supplier) cachedStep0(browser *rod.Browser, query subHDSearchQuery) (st
 	if cacheable {
 		s.ensureSearchCache().putDetail(cacheKey, detailURL)
 	} else {
-		s.log.Debugf("subhd search result not cached query_kind=%s keyword=%q", query.Kind, query.Keyword)
+		s.log.Debugf("subhd search result not cached query_kind=%s", query.Kind)
 	}
 	return detailURL, nil
 }
@@ -43,7 +48,8 @@ func (s *Supplier) cachedStep0(browser *rod.Browser, query subHDSearchQuery) (st
 func (s *Supplier) cachedStep1(browser *rod.Browser, detailPageURL string) ([]HdListItem, error) {
 	cacheKey := settings.Get().AdvancedSettings.SuppliersSettings.SubHD.RootUrl + "|" + detailPageURL
 	if items, ok := s.ensureSearchCache().getList(cacheKey); ok {
-		s.log.Debugf("subhd detail cache hit url=%q candidates=%d", detailPageURL, len(items))
+		subtitle_metrics.RecordCacheHit(common.SubSiteSubHd)
+		s.log.Debugf("subhd detail cache hit candidates=%d", len(items))
 		return items, nil
 	}
 

@@ -57,6 +57,9 @@ type QueueSummary struct {
 	ByErrorCategory map[string]int `json:"by_error_category"`
 	RetryScheduled  int            `json:"retry_scheduled"`
 	ReadyNow        int            `json:"ready_now"`
+	WaitingSeries   int            `json:"waiting_series"`
+	SeriesGroups    int            `json:"series_groups"`
+	BatchableGroups int            `json:"batchable_groups"`
 }
 
 type ReplyJobPage struct {

@@ -2,10 +2,31 @@ package subhd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestSubHDNegativeCachePersistsWithoutRawQuery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "negative-cache.json")
+	cache := newSubHDSearchCache(path)
+	cache.putDetail("https://example.invalid|Private Show", "")
+
+	reloaded := newSubHDSearchCache(path)
+	if value, ok := reloaded.getDetail("https://example.invalid|Private Show"); !ok || value != "" {
+		t.Fatalf("persisted negative cache = %q, %v", value, ok)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "Private Show") || strings.Contains(string(data), "example.invalid") {
+		t.Fatalf("persistent negative cache exposed raw query: %s", data)
+	}
+}
 
 func TestSubHDSearchCacheStoresPositiveAndNegativeResults(t *testing.T) {
 	cache := newSubHDSearchCache()

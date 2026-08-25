@@ -12,7 +12,8 @@ import (
 func TestFilterJobsAndSummary(t *testing.T) {
 	now := time.Now()
 	jobs := []taskQueueTypes.OneJob{
-		{VideoName: "Anime 01.mkv", VideoType: common.Anime, JobStatus: taskQueueTypes.Waiting, TaskPriority: 6, ErrorInfo: "No Sub Found", UpdateTime: emby.Time(now)},
+		{VideoName: "Anime 01.mkv", VideoType: common.Anime, JobStatus: taskQueueTypes.Waiting, TaskPriority: 6, ErrorInfo: "No Sub Found", UpdateTime: emby.Time(now), ForceRun: true, SeriesRootDirPath: "/media/anime", Season: 1},
+		{VideoName: "Anime 02.mkv", VideoType: common.Anime, JobStatus: taskQueueTypes.Waiting, TaskPriority: 6, SeriesRootDirPath: "/media/anime", Season: 1},
 		{VideoName: "Movie.mkv", VideoType: common.Movie, JobStatus: taskQueueTypes.Done, TaskPriority: 5, UpdateTime: emby.Time(now)},
 	}
 	status := int(taskQueueTypes.Waiting)
@@ -21,7 +22,8 @@ func TestFilterJobsAndSummary(t *testing.T) {
 		t.Fatalf("unexpected filtered jobs: %+v", filtered)
 	}
 	summary := summarizeJobs(jobs, now)
-	if summary.Total != 2 || summary.ByVideoType["anime"] != 1 || summary.ByStatus["done"] != 1 {
+	if summary.Total != 3 || summary.ByVideoType["anime"] != 2 || summary.ByStatus["done"] != 1 ||
+		summary.WaitingSeries != 2 || summary.SeriesGroups != 1 || summary.BatchableGroups != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 }

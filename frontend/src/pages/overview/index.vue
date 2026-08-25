@@ -176,6 +176,18 @@ const queueMetrics = computed(() => [
     note: '可通过源与识别优化',
     className: 'text-negative',
   },
+  {
+    label: '可批量剧集',
+    value: overview.queue?.batchable_groups || 0,
+    note: '当前可合并搜索的同季剧集组',
+    className: 'text-primary',
+  },
+  {
+    label: '已保存字幕',
+    value: (overview.suppliers || []).reduce((sum, item) => sum + (item.saves || 0), 0),
+    note: '从候选到落盘的实际成果',
+    className: 'text-positive',
+  },
 ]);
 const outcomeDays = computed(() => {
   const map = {};

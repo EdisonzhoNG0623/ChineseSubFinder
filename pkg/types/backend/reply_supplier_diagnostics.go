@@ -28,6 +28,10 @@ type SupplierDiagnostic struct {
 	P95AttemptMs      int64     `json:"p95_attempt_millis"`
 	Timeouts          int64     `json:"timeouts"`
 	CircuitSkips      int64     `json:"circuit_skips"`
+	Selections        int64     `json:"selections"`
+	Saves             int64     `json:"saves"`
+	CacheHits         int64     `json:"cache_hits"`
+	EarlyStops        int64     `json:"early_stops"`
 	CircuitOpenUntil  time.Time `json:"circuit_open_until,omitempty"`
 }
 

@@ -10,7 +10,7 @@ import (
 
 const (
 	noSubRetryBase      = 12 * time.Hour
-	noSubRetryMax       = 14 * 24 * time.Hour
+	noSubRetryMax       = 30 * 24 * time.Hour
 	transientRetryBase  = 30 * time.Minute
 	transientRetryMax   = 6 * time.Hour
 	persistentRetryBase = 12 * time.Hour

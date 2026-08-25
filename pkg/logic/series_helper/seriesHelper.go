@@ -214,11 +214,25 @@ func DownloadSubtitleInAllSiteByOneSeriesContext(ctx context.Context, logger *lo
 		if requireAllSuppliers {
 			return false
 		}
-		ranked := subtitle_candidate.Rank(items, target)
+		// A companion episode may be solved by a collection while the queue's
+		// primary episode is still missing. Only the primary episode may stop the
+		// progressive supplier search early.
+		strongTarget := target
+		if primary, found := seriesInfo.NeedDlEpsKeyList[seriesInfo.PrimaryEpisodeKey]; found {
+			strongTarget.Episodes = []subtitle_candidate.EpisodeTarget{{
+				Season: primary.Season, Episode: primary.Episode, AbsoluteEpisode: primary.AbsoluteEpisode,
+			}}
+		}
+		ranked := subtitle_candidate.Rank(items, strongTarget)
 		return len(ranked) > 0 && ranked[0].Score >= 700
 	}
-	outSUbInfos, searchErr := supplier_search.Run(ctx, logger, Suppliers, supplier_search.NewSearchID("series"), fastEnough,
-		func(oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
+	outSUbInfos, searchErr := supplier_search.RunContext(ctx, logger, Suppliers, supplier_search.NewSearchID("series"), fastEnough,
+		func(searchCtx context.Context, oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
+			if contextual, ok := oneSupplier.(ifaces.ISeriesSupplierContext); ok {
+				subInfos, err := contextual.GetSubListFromFile4SeriesContext(searchCtx, seriesInfo)
+				sub_helper.ChangeVideoExt2SubExt(subInfos)
+				return subInfos, err
+			}
 			subInfos, err := oneSupplier.GetSubListFromFile4Series(seriesInfo)
 			sub_helper.ChangeVideoExt2SubExt(subInfos)
 			return subInfos, err

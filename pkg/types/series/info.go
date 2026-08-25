@@ -21,6 +21,10 @@ type SeriesInfo struct {
 	SeasonDict       map[int]int
 	NeedDlSeasonDict map[int]int
 	NeedDlEpsKeyList map[string]EpisodeInfo // SxEx
+	// PrimaryEpisodeKey identifies the queue item that initiated a multi-episode
+	// search. Suppliers may return siblings, but early-stop decisions must still
+	// satisfy this episode first.
+	PrimaryEpisodeKey string
 }
 
 type EpisodeInfo struct {

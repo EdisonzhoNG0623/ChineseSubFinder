@@ -31,13 +31,15 @@ func TestSupplierDiagnosticsExposeBoundedPerformanceAggregates(t *testing.T) {
 		common.SubSiteXunLei: {
 			Name: common.SubSiteXunLei, Attempts: 2, TotalAttemptMs: 3000, MaxAttemptMs: 2000,
 			AttemptBuckets: [6]int64{0, 2}, Timeouts: 1, CircuitSkips: 3, CircuitOpenUntil: openUntil,
+			Selections: 4, Saves: 3, CacheHits: 5, EarlyStops: 2,
 		},
 	}
 	for _, diagnostic := range buildSupplierDiagnostics(s, runtime, nil) {
 		if diagnostic.Name != common.SubSiteXunLei {
 			continue
 		}
-		if diagnostic.AverageAttemptMs != 1500 || diagnostic.P95AttemptMs != 5000 || diagnostic.Timeouts != 1 || diagnostic.CircuitSkips != 3 {
+		if diagnostic.AverageAttemptMs != 1500 || diagnostic.P95AttemptMs != 5000 || diagnostic.Timeouts != 1 || diagnostic.CircuitSkips != 3 ||
+			diagnostic.Selections != 4 || diagnostic.Saves != 3 || diagnostic.CacheHits != 5 || diagnostic.EarlyStops != 2 {
 			t.Fatalf("unexpected performance aggregates: %+v", diagnostic)
 		}
 		if diagnostic.Health != "DEGRADED" || diagnostic.CircuitOpenUntil != openUntil {

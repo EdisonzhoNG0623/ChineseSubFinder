@@ -36,9 +36,9 @@ func TestRetryDelayClasses(t *testing.T) {
 		{name: "no subtitle first", error: "No Sub Found", attempts: 1, want: 12 * time.Hour},
 		{name: "no subtitle second", error: "No Sub Found", attempts: 2, want: 2 * 24 * time.Hour},
 		{name: "no subtitle third", error: "No Sub Found", attempts: 3, want: 7 * 24 * time.Hour},
-		{name: "all suppliers empty", error: "all site download sub not found", attempts: 4, want: 14 * 24 * time.Hour},
+		{name: "all suppliers empty", error: "all site download sub not found", attempts: 4, want: 30 * 24 * time.Hour},
 		{name: "empty supplier result", error: "No Sub Downloaded.", attempts: 2, want: 2 * 24 * time.Hour},
-		{name: "no subtitle capped", error: "No Sub Found", attempts: 100, want: 14 * 24 * time.Hour},
+		{name: "no subtitle capped", error: "No Sub Found", attempts: 100, want: 30 * 24 * time.Hour},
 		{name: "transient first", error: "context deadline exceeded", attempts: 1, want: 30 * time.Minute},
 		{name: "transient capped", error: "connection reset by peer", attempts: 100, want: 6 * time.Hour},
 		{name: "persistent capped", error: "no metadata file", attempts: 100, want: 7 * 24 * time.Hour},
@@ -80,7 +80,7 @@ func TestNextAttemptAtAppliesNewNoSubMinimumToOldSchedule(t *testing.T) {
 		UpdateTime:      emby.Time(now),
 		NextAttemptTime: emby.Time(now.Add(8 * time.Hour)),
 	}
-	if got := nextAttemptAt(job); !got.Equal(now.Add(14 * 24 * time.Hour)) {
+	if got := nextAttemptAt(job); !got.Equal(now.Add(30 * 24 * time.Hour)) {
 		t.Fatalf("nextAttemptAt() = %v, want current no-sub minimum", got)
 	}
 }

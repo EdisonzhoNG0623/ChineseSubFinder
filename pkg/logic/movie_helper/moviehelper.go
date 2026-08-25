@@ -50,8 +50,13 @@ func OneMovieDlSubInAllSiteContext(ctx context.Context, logger *logrus.Logger, S
 		ranked := subtitle_candidate.Rank(items, target)
 		return len(ranked) > 0 && ranked[0].Score >= 100
 	}
-	outSUbInfos, searchErr := supplier_search.Run(ctx, logger, Suppliers, supplier_search.NewSearchID("movie"), fastEnough,
-		func(oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
+	outSUbInfos, searchErr := supplier_search.RunContext(ctx, logger, Suppliers, supplier_search.NewSearchID("movie"), fastEnough,
+		func(searchCtx context.Context, oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
+			if contextual, ok := oneSupplier.(ifaces.IMovieSupplierContext); ok {
+				subInfos, err := contextual.GetSubListFromFile4MovieContext(searchCtx, oneVideoFullPath)
+				sub_helper.ChangeVideoExt2SubExt(subInfos)
+				return subInfos, err
+			}
 			return OneMovieDlSubInOneSite(logger, oneVideoFullPath, i, oneSupplier)
 		})
 	if searchErr != nil {

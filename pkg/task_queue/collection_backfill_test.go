@@ -75,6 +75,40 @@ func TestMarkSeriesEpisodesDoneBatchesOnlySavedEpisodes(t *testing.T) {
 	}
 }
 
+func TestGetReadySeriesJobsReturnsDueEpisodesInSameSeason(t *testing.T) {
+	const queueName = "testReadySeriesBatch"
+	cache_center.DelDb(queueName)
+	defer cache_center.DelDb(queueName)
+
+	queue := NewTaskQueue(cache_center.NewCacheCenter(queueName, log_helper.GetLogger4Tester()))
+	defer queue.Close()
+	now := time.Now()
+	seriesRoot := "/media/series"
+	jobs := []taskQueue2.OneJob{
+		collectionQueueJob("primary", seriesRoot, 1, taskQueue2.Waiting, DefaultTaskPriorityLevel),
+		collectionQueueJob("due-old", seriesRoot, 2, taskQueue2.Waiting, DefaultTaskPriorityLevel),
+		collectionQueueJob("due-new", seriesRoot, 3, taskQueue2.Waiting, DefaultTaskPriorityLevel),
+		collectionQueueJob("future", seriesRoot, 4, taskQueue2.Waiting, DefaultTaskPriorityLevel),
+		collectionQueueJob("other-season", seriesRoot, 1, taskQueue2.Waiting, DefaultTaskPriorityLevel),
+	}
+	jobs[0].Season, jobs[0].AddedTime = 1, emby.Time(now.Add(-4*time.Hour))
+	jobs[1].Season, jobs[1].AddedTime = 1, emby.Time(now.Add(-3*time.Hour))
+	jobs[2].Season, jobs[2].AddedTime = 1, emby.Time(now.Add(-2*time.Hour))
+	jobs[3].Season, jobs[3].NextAttemptTime = 1, emby.Time(now.Add(time.Hour))
+	jobs[3].DownloadTimes, jobs[3].ErrorInfo = 1, "temporary network error"
+	jobs[4].Season, jobs[4].AddedTime = 2, emby.Time(now.Add(-time.Hour))
+	for _, job := range jobs {
+		if ok, err := queue.Add(job); err != nil || !ok {
+			t.Fatalf("add %s: ok=%v err=%v", job.Id, ok, err)
+		}
+	}
+
+	got := queue.GetReadySeriesJobs(seriesRoot, 1, "primary", 2, now)
+	if len(got) != 2 || got[0].Id != "due-old" || got[1].Id != "due-new" {
+		t.Fatalf("ready series batch = %#v", got)
+	}
+}
+
 func collectionQueueJob(id, seriesRoot string, episode int, status taskQueue2.JobStatus, priority int) taskQueue2.OneJob {
 	now := emby.Time(time.Now())
 	return taskQueue2.OneJob{
