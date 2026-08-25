@@ -143,46 +143,22 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 	// 只针对需要下载字幕的视频进行字幕的选择保存
 	subVideoCount := 0
 	for epsKey, episodeInfo := range seriesInfo.NeedDlEpsKeyList {
-
-		// 创建一个 chan 用于任务的中断和超时
-		done := make(chan interface{}, 1)
-		// 接收内部任务的 panic
-		panicChan := make(chan interface{}, 1)
-
-		go func() {
-			defer func() {
-				if p := recover(); p != nil {
-					panicChan <- p
-				}
-
-				close(done)
-				close(panicChan)
-			}()
-			// 匹配对应的 Eps 去处理
-			done <- d.oneVideoSelectBestSub(episodeInfo.FileFullPath, organizeSubFiles[epsKey])
-		}()
-
-		select {
-		case errInterface := <-done:
-			if errInterface != nil {
-				errSave2Local = errInterface.(error)
-				d.log.Errorln(errInterface.(error))
-			} else {
-				save2LocalSubCount++
-				if epsKey == requestedEpisodeKey {
-					requestedEpisodeSaved = true
-				}
-			}
-			break
-		case p := <-panicChan:
-			// 遇到内部的 panic，向外抛出
-			d.log.Errorln("seriesDlFunc.oneVideoSelectBestSub panicChan", p)
-			break
-		case <-ctx.Done():
-			{
-				err = errors.New(fmt.Sprintf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d", seriesInfo.Name, episodeInfo.Season, episodeInfo.Episode))
-				d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
-				return err
+		saveErr := runSubtitleSaveWithContext(ctx, func() error {
+			return d.oneVideoSelectBestSub(episodeInfo.FileFullPath, organizeSubFiles[epsKey])
+		})
+		if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) {
+			err = fmt.Errorf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d: %w",
+				seriesInfo.Name, episodeInfo.Season, episodeInfo.Episode, saveErr)
+			d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
+			return err
+		}
+		if saveErr != nil {
+			errSave2Local = saveErr
+			d.log.Errorln(saveErr)
+		} else {
+			save2LocalSubCount++
+			if epsKey == requestedEpisodeKey {
+				requestedEpisodeSaved = true
 			}
 		}
 
@@ -219,44 +195,22 @@ func (d *Downloader) seriesDlFunc(ctx context.Context, job taskQueue2.OneJob, do
 			continue
 		}
 
-		// 创建一个 chan 用于任务的中断和超时
-		done := make(chan interface{}, 1)
-		// 接收内部任务的 panic
-		panicChan := make(chan interface{}, 1)
-		go func() {
-			defer func() {
-				if p := recover(); p != nil {
-					panicChan <- p
-				}
-				close(done)
-				close(panicChan)
-			}()
-			// 匹配对应的 Eps 去处理
-			done <- d.oneVideoSelectBestSub(episodeInfo.FileFullPath, fullSeasonSubs)
-		}()
-
-		select {
-		case errInterface := <-done:
-			if errInterface != nil {
-				errSave2Local = errInterface.(error)
-				d.log.Errorln(errInterface.(error))
-			} else {
-				save2LocalSubCount++
-				if episodeInfo.Season == job.Season && episodeInfo.Episode == job.Episode {
-					requestedEpisodeSaved = true
-				}
-			}
-
-			break
-		case p := <-panicChan:
-			// 遇到内部的 panic，向外抛出
-			d.log.Errorln("seriesDlFunc.oneVideoSelectBestSub panicChan", p)
-			break
-		case <-ctx.Done():
-			{
-				err = errors.New(fmt.Sprintf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d", seriesInfo.Name, episodeInfo.Season, episodeInfo.Episode))
-				d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
-				return err
+		saveErr := runSubtitleSaveWithContext(ctx, func() error {
+			return d.oneVideoSelectBestSub(episodeInfo.FileFullPath, fullSeasonSubs)
+		})
+		if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) {
+			err = fmt.Errorf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d: %w",
+				seriesInfo.Name, episodeInfo.Season, episodeInfo.Episode, saveErr)
+			d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
+			return err
+		}
+		if saveErr != nil {
+			errSave2Local = saveErr
+			d.log.Errorln(saveErr)
+		} else {
+			save2LocalSubCount++
+			if episodeInfo.Season == job.Season && episodeInfo.Episode == job.Episode {
+				requestedEpisodeSaved = true
 			}
 		}
 	}

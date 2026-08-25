@@ -1,8 +1,11 @@
 package downloader
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/task_queue"
 )
@@ -26,6 +29,35 @@ func TestSeriesDownloadOutcomeError(t *testing.T) {
 				t.Fatalf("seriesDownloadOutcomeError(%d, %v) = %v, want %v", test.saved, test.saveErr, got, test.wantError)
 			}
 		})
+	}
+}
+
+func TestRunSubtitleSaveWithContextReturnsOperationResult(t *testing.T) {
+	want := errors.New("save failed")
+	if got := runSubtitleSaveWithContext(context.Background(), func() error { return want }); !errors.Is(got, want) {
+		t.Fatalf("runSubtitleSaveWithContext() = %v, want %v", got, want)
+	}
+}
+
+func TestRunSubtitleSaveWithContextConvertsPanicToError(t *testing.T) {
+	got := runSubtitleSaveWithContext(context.Background(), func() error { panic("broken save") })
+	if got == nil || !strings.Contains(got.Error(), "broken save") {
+		t.Fatalf("runSubtitleSaveWithContext() = %v, want recovered panic", got)
+	}
+}
+
+func TestRunSubtitleSaveWithContextReturnsOnCancellation(t *testing.T) {
+	release := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	got := runSubtitleSaveWithContext(ctx, func() error {
+		<-release
+		return nil
+	})
+	close(release)
+	if !errors.Is(got, context.DeadlineExceeded) || time.Since(startedAt) > time.Second {
+		t.Fatalf("cancellation not enforced promptly: elapsed=%s err=%v", time.Since(startedAt), got)
 	}
 }
 

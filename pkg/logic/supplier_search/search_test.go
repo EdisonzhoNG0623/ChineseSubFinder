@@ -118,3 +118,20 @@ func TestRunSkipsOpenCircuit(t *testing.T) {
 	default:
 	}
 }
+
+func TestTimeoutForSupplierTier(t *testing.T) {
+	tests := []struct {
+		name, phase string
+		want        time.Duration
+	}{
+		{name: "xunlei", phase: "fast", want: 20 * time.Second},
+		{name: "assrt", phase: "slow", want: 180 * time.Second},
+		{name: "subtitle_best", phase: "slow", want: 30 * time.Second},
+		{name: "subhd", phase: "slow", want: 60 * time.Second},
+	}
+	for _, test := range tests {
+		if got := timeoutFor(test.name, test.phase); got != test.want {
+			t.Errorf("timeoutFor(%q, %q) = %s, want %s", test.name, test.phase, got, test.want)
+		}
+	}
+}

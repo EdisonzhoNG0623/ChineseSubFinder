@@ -169,7 +169,7 @@ func timeoutFor(name, phase string) time.Duration {
 	}
 	switch strings.ToLower(name) {
 	case "assrt":
-		return 90 * time.Second
+		return 180 * time.Second
 	case "subtitle_best", "subtitlebest":
 		return 30 * time.Second
 	default:
