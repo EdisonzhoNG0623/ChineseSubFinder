@@ -109,6 +109,84 @@
             ><q-toggle v-model="credentials.subdl_settings.enabled" aria-label="启用 SubDL"
           /></q-item-section>
         </q-item>
+
+        <q-item v-if="credentials.open_subtitles_settings" class="q-pa-md">
+          <q-item-section>
+            <q-item-label class="text-weight-medium">OpenSubtitles.com</q-item-label>
+            <q-item-label caption
+              >通过 IMDb/TMDB 与 OpenSubtitles 文件散列精确匹配；下载需要 API Key 和账户登录。</q-item-label
+            >
+            <div v-if="credentials.open_subtitles_settings.enabled" class="credential-grid q-mt-md">
+              <q-input
+                v-model="credentials.open_subtitles_settings.api_key"
+                type="password"
+                autocomplete="new-password"
+                label="API Key"
+                outlined
+                dense
+                :rules="[(value) => !!value || '启用时必须填写 API Key']"
+              />
+              <q-input
+                v-model="credentials.open_subtitles_settings.username"
+                autocomplete="username"
+                label="用户名"
+                outlined
+                dense
+                :rules="[(value) => !!value || '启用时必须填写用户名']"
+              />
+              <q-input
+                v-model="credentials.open_subtitles_settings.password"
+                type="password"
+                autocomplete="new-password"
+                label="密码"
+                outlined
+                dense
+                :rules="[(value) => !!value || '启用时必须填写密码']"
+              />
+            </div>
+            <div v-if="credentials.open_subtitles_settings.enabled" class="row q-col-gutter-md q-mt-xs">
+              <div class="col-12 col-md-4">
+                <q-toggle v-model="credentials.open_subtitles_settings.use_hash" label="启用文件散列匹配" />
+              </div>
+              <div class="col-12 col-md-4">
+                <q-toggle
+                  v-model="credentials.open_subtitles_settings.include_ai_translated"
+                  label="包含 AI 翻译字幕"
+                />
+              </div>
+              <div class="col-12 col-md-4">
+                <q-toggle
+                  v-model="credentials.open_subtitles_settings.include_machine_translated"
+                  label="包含机器翻译字幕"
+                />
+              </div>
+            </div>
+          </q-item-section>
+          <q-item-section side top>
+            <q-toggle v-model="credentials.open_subtitles_settings.enabled" aria-label="启用 OpenSubtitles.com" />
+          </q-item-section>
+        </q-item>
+
+        <q-item v-if="credentials.subsource_settings" class="q-pa-md">
+          <q-item-section>
+            <q-item-label class="text-weight-medium">SubSource</q-item-label>
+            <q-item-label caption>通过 IMDb 精确定位，支持中文字幕、单集结果和完整季字幕包。</q-item-label>
+            <q-input
+              v-if="credentials.subsource_settings.enabled"
+              v-model="credentials.subsource_settings.api_key"
+              type="password"
+              autocomplete="new-password"
+              label="API Key"
+              outlined
+              dense
+              class="q-mt-md"
+              :rules="[(value) => !!value || '启用时必须填写 API Key']"
+            />
+          </q-item-section>
+          <q-item-section side top>
+            <q-toggle v-model="credentials.subsource_settings.enabled" aria-label="启用 SubSource" />
+          </q-item-section>
+        </q-item>
       </q-list>
     </section>
   </div>
@@ -153,5 +231,17 @@ const handleSubSourceUpdate = (item, data) => {
 .text-mono {
   font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
   font-size: 12px;
+}
+
+.credential-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1023px) {
+  .credential-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

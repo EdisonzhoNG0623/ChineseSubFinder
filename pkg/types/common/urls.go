@@ -25,4 +25,7 @@ const (
 	SubDLRootURLDef     = "https://api.subdl.com"
 	SubDLSearchURL      = "/api/v1/subtitles"
 	SubDLDownloadURLDef = "https://dl.subdl.com"
+
+	OpenSubtitlesRootURLDef = "https://api.opensubtitles.com"
+	SubSourceRootURLDef     = "https://api.subsource.net"
 )

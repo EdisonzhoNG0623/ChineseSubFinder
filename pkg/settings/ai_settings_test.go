@@ -31,6 +31,9 @@ func TestMaskAndRestoreSecrets(t *testing.T) {
 	current.SubtitleSources.AssrtSettings.Token = "assrt-secret"
 	current.SubtitleSources.SubtitleBestSettings.ApiKey = "subtitle-best-secret"
 	current.SubtitleSources.SubDLSettings.ApiKey = "subdl-secret"
+	current.SubtitleSources.OpenSubtitlesSettings.APIKey = "opensubtitles-key"
+	current.SubtitleSources.OpenSubtitlesSettings.Password = "opensubtitles-password"
+	current.SubtitleSources.SubSourceSettings.APIKey = "subsource-secret"
 	current.ExperimentalFunction.ApiKeySettings.Key = "api-secret"
 	current.ExperimentalFunction.AISettings.APIKey = "ai-secret"
 	MaskSecrets(current)
@@ -39,7 +42,8 @@ func TestMaskAndRestoreSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, secret := range []string{"user-secret", "emby-secret", "proxy-secret", "tmdb-secret", "assrt-secret",
-		"subtitle-best-secret", "subdl-secret", "api-secret", "ai-secret"} {
+		"subtitle-best-secret", "subdl-secret", "opensubtitles-key", "opensubtitles-password",
+		"subsource-secret", "api-secret", "ai-secret"} {
 		if strings.Contains(string(serialized), secret) {
 			t.Fatalf("secret %q was not masked", secret)
 		}
@@ -52,6 +56,9 @@ func TestMaskAndRestoreSecrets(t *testing.T) {
 	incoming.SubtitleSources.AssrtSettings.Token = noPassword4Show
 	incoming.SubtitleSources.SubtitleBestSettings.ApiKey = noPassword4Show
 	incoming.SubtitleSources.SubDLSettings.ApiKey = noPassword4Show
+	incoming.SubtitleSources.OpenSubtitlesSettings.APIKey = noPassword4Show
+	incoming.SubtitleSources.OpenSubtitlesSettings.Password = noPassword4Show
+	incoming.SubtitleSources.SubSourceSettings.APIKey = noPassword4Show
 	incoming.ExperimentalFunction.ApiKeySettings.Key = noPassword4Show
 	incoming.ExperimentalFunction.AISettings.APIKey = noPassword4Show
 	original := NewSettings(t.TempDir())
@@ -62,6 +69,9 @@ func TestMaskAndRestoreSecrets(t *testing.T) {
 	original.SubtitleSources.AssrtSettings.Token = "assrt-secret"
 	original.SubtitleSources.SubtitleBestSettings.ApiKey = "subtitle-best-secret"
 	original.SubtitleSources.SubDLSettings.ApiKey = "subdl-secret"
+	original.SubtitleSources.OpenSubtitlesSettings.APIKey = "opensubtitles-key"
+	original.SubtitleSources.OpenSubtitlesSettings.Password = "opensubtitles-password"
+	original.SubtitleSources.SubSourceSettings.APIKey = "subsource-secret"
 	original.ExperimentalFunction.ApiKeySettings.Key = "api-secret"
 	original.ExperimentalFunction.AISettings.APIKey = "ai-secret"
 	RestoreMaskedSecrets(incoming, original)
@@ -72,7 +82,10 @@ func TestMaskAndRestoreSecrets(t *testing.T) {
 		incoming.SubtitleSources.SubtitleBestSettings.ApiKey != "subtitle-best-secret" ||
 		incoming.ExperimentalFunction.ApiKeySettings.Key != "api-secret" ||
 		incoming.ExperimentalFunction.AISettings.APIKey != "ai-secret" ||
-		incoming.SubtitleSources.SubDLSettings.ApiKey != "subdl-secret" {
+		incoming.SubtitleSources.SubDLSettings.ApiKey != "subdl-secret" ||
+		incoming.SubtitleSources.OpenSubtitlesSettings.APIKey != "opensubtitles-key" ||
+		incoming.SubtitleSources.OpenSubtitlesSettings.Password != "opensubtitles-password" ||
+		incoming.SubtitleSources.SubSourceSettings.APIKey != "subsource-secret" {
 		t.Fatal("masked secrets were not restored")
 	}
 }
@@ -87,5 +100,24 @@ func TestCheckNormalizesMissingNestedSettings(t *testing.T) {
 	if s.ExperimentalFunction.AISettings.MinConfidence != 0.85 ||
 		s.ExperimentalFunction.AISettings.TimeoutSeconds != 20 {
 		t.Fatalf("unexpected AI defaults: %+v", s.ExperimentalFunction.AISettings)
+	}
+}
+
+func TestSubtitleSourceCredentialValidation(t *testing.T) {
+	sources := NewSubtitleSources()
+	sources.OpenSubtitlesSettings.Enabled = true
+	if err := sources.Validate(); err == nil {
+		t.Fatal("enabled OpenSubtitles without credentials was accepted")
+	}
+	sources.OpenSubtitlesSettings.APIKey = "key"
+	sources.OpenSubtitlesSettings.Username = "user"
+	sources.OpenSubtitlesSettings.Password = "password"
+	sources.SubSourceSettings.Enabled = true
+	if err := sources.Validate(); err == nil {
+		t.Fatal("enabled SubSource without API key was accepted")
+	}
+	sources.SubSourceSettings.APIKey = "key"
+	if err := sources.Validate(); err != nil {
+		t.Fatalf("valid subtitle source credentials were rejected: %v", err)
 	}
 }

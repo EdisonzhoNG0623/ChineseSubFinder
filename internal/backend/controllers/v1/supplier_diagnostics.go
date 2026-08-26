@@ -51,6 +51,8 @@ var supplierDefinitions = []supplierDefinition{
 	{common.SubSiteA4K, "A4K", common.SubA4kRootUrlDef, []string{"自定义镜像"}},
 	{common.SubSiteSubtitleBest, "SubtitleBest", common.SubSubtitleBestRootUrlDef, []string{"电影", "剧集", "精确 ID"}},
 	{common.SubSiteSubDL, "SubDL", common.SubDLRootURLDef, []string{"电影", "剧集", "绝对集号"}},
+	{common.SubSiteOpenSubtitles, "OpenSubtitles.com", common.OpenSubtitlesRootURLDef, []string{"电影", "剧集", "文件散列", "精确 ID"}},
+	{common.SubSiteSubSource, "SubSource", common.SubSourceRootURLDef, []string{"电影", "剧集", "整季字幕包", "绝对集号"}},
 	{common.SubSiteZiMuKu, "字幕库", common.SubZiMuKuRootUrlDef, []string{"电影", "剧集", "浏览器"}},
 	{common.SubSiteSubHd, "SubHD", common.SubSubHDRootUrlDef, []string{"电影", "剧集", "动漫", "绝对集号", "别名回退"}},
 }
@@ -65,6 +67,8 @@ func buildSupplierDiagnostics(s *settings.Settings, runtime map[string]subtitle_
 		if one != nil {
 			diagnostic.RootURL, diagnostic.DailyLimit = one.RootUrl, one.DailyDownloadLimit
 			diagnostic.Enabled = one.DailyDownloadLimit != 0
+		} else if definition.name == common.SubSiteOpenSubtitles || definition.name == common.SubSiteSubSource {
+			diagnostic.RootURL, diagnostic.DailyLimit, diagnostic.Enabled = definition.defaultURL, -1, true
 		}
 		diagnostic.Configured = supplierCredentialConfigured(s, definition.name)
 		diagnostic.Enabled = diagnostic.Enabled && diagnostic.Configured
@@ -148,6 +152,11 @@ func supplierCredentialConfigured(s *settings.Settings, name string) bool {
 		return s.SubtitleSources.SubtitleBestSettings.Enabled && strings.TrimSpace(s.SubtitleSources.SubtitleBestSettings.ApiKey) != ""
 	case common.SubSiteSubDL:
 		return s.SubtitleSources.SubDLSettings.Enabled && strings.TrimSpace(s.SubtitleSources.SubDLSettings.ApiKey) != ""
+	case common.SubSiteOpenSubtitles:
+		cfg := s.SubtitleSources.OpenSubtitlesSettings
+		return cfg.Enabled && strings.TrimSpace(cfg.APIKey) != "" && strings.TrimSpace(cfg.Username) != "" && cfg.Password != ""
+	case common.SubSiteSubSource:
+		return s.SubtitleSources.SubSourceSettings.Enabled && strings.TrimSpace(s.SubtitleSources.SubSourceSettings.APIKey) != ""
 	default:
 		return true
 	}

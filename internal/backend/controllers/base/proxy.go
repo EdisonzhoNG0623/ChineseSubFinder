@@ -2,8 +2,10 @@ package base
 
 import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/opensubtitles"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subdl"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subhd"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subsource"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subtitle_best"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/zimuku"
 	"net/http"
@@ -101,6 +103,13 @@ func (cb *ControllerBase) CheckProxyHandler(c *gin.Context) {
 	if settings.Get().SubtitleSources.SubDLSettings.Enabled &&
 		settings.Get().SubtitleSources.SubDLSettings.ApiKey != "" {
 		subSupplierHub.AddSubSupplier(subdl.NewSupplier(cb.fileDownloader))
+	}
+	openSubtitles := settings.Get().SubtitleSources.OpenSubtitlesSettings
+	if openSubtitles.Enabled && openSubtitles.APIKey != "" && openSubtitles.Username != "" && openSubtitles.Password != "" {
+		subSupplierHub.AddSubSupplier(opensubtitles.NewSupplier(cb.fileDownloader))
+	}
+	if subSource := settings.Get().SubtitleSources.SubSourceSettings; subSource.Enabled && subSource.APIKey != "" {
+		subSupplierHub.AddSubSupplier(subsource.NewSupplier(cb.fileDownloader))
 	}
 
 	outStatus := subSupplierHub.CheckSubSiteStatus()

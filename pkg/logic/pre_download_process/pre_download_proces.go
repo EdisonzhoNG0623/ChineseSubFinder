@@ -15,9 +15,11 @@ import (
 	subSupplier "github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/a4k"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/assrt"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/opensubtitles"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/shooter"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subdl"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subhd"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subsource"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/xunlei"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/zimuku"
 
@@ -130,6 +132,15 @@ func (p *PreDownloadProcess) Init() *PreDownloadProcess {
 		if settings.Get().SubtitleSources.SubDLSettings.Enabled &&
 			settings.Get().SubtitleSources.SubDLSettings.ApiKey != "" {
 			p.SubSupplierHub.AddSubSupplier(subdl.NewSupplier(p.fileDownloader))
+		}
+
+		openSubtitles := settings.Get().SubtitleSources.OpenSubtitlesSettings
+		if openSubtitles.Enabled && openSubtitles.APIKey != "" && openSubtitles.Username != "" && openSubtitles.Password != "" {
+			p.SubSupplierHub.AddSubSupplier(opensubtitles.NewSupplier(p.fileDownloader))
+		}
+
+		if subSource := settings.Get().SubtitleSources.SubSourceSettings; subSource.Enabled && subSource.APIKey != "" {
+			p.SubSupplierHub.AddSubSupplier(subsource.NewSupplier(p.fileDownloader))
 		}
 
 		if pkg.LiteMode() == false {

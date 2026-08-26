@@ -95,6 +95,9 @@ func SetFullNewSettings(inSettings *Settings) error {
 	nowConfigFPath := _settings.configFPath
 	RestoreMaskedSecrets(inSettings, _settings)
 	inSettings.Check()
+	if err := inSettings.SubtitleSources.Validate(); err != nil {
+		return err
+	}
 	if err := inSettings.ExperimentalFunction.AISettings.Validate(); err != nil {
 		return err
 	}
@@ -198,6 +201,15 @@ func MaskSecrets(s *Settings) {
 		if s.SubtitleSources.SubDLSettings.ApiKey != "" {
 			s.SubtitleSources.SubDLSettings.ApiKey = noPassword4Show
 		}
+		if s.SubtitleSources.OpenSubtitlesSettings.APIKey != "" {
+			s.SubtitleSources.OpenSubtitlesSettings.APIKey = noPassword4Show
+		}
+		if s.SubtitleSources.OpenSubtitlesSettings.Password != "" {
+			s.SubtitleSources.OpenSubtitlesSettings.Password = noPassword4Show
+		}
+		if s.SubtitleSources.SubSourceSettings.APIKey != "" {
+			s.SubtitleSources.SubSourceSettings.APIKey = noPassword4Show
+		}
 	}
 	if s.ExperimentalFunction != nil {
 		if s.ExperimentalFunction.ApiKeySettings.Key != "" {
@@ -234,6 +246,9 @@ func RestoreMaskedSecrets(incoming, current *Settings) {
 		restore(&incoming.SubtitleSources.AssrtSettings.Token, current.SubtitleSources.AssrtSettings.Token)
 		restore(&incoming.SubtitleSources.SubtitleBestSettings.ApiKey, current.SubtitleSources.SubtitleBestSettings.ApiKey)
 		restore(&incoming.SubtitleSources.SubDLSettings.ApiKey, current.SubtitleSources.SubDLSettings.ApiKey)
+		restore(&incoming.SubtitleSources.OpenSubtitlesSettings.APIKey, current.SubtitleSources.OpenSubtitlesSettings.APIKey)
+		restore(&incoming.SubtitleSources.OpenSubtitlesSettings.Password, current.SubtitleSources.OpenSubtitlesSettings.Password)
+		restore(&incoming.SubtitleSources.SubSourceSettings.APIKey, current.SubtitleSources.SubSourceSettings.APIKey)
 	}
 	if incoming.ExperimentalFunction != nil && current.ExperimentalFunction != nil {
 		restore(&incoming.ExperimentalFunction.ApiKeySettings.Key, current.ExperimentalFunction.ApiKeySettings.Key)
