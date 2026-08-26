@@ -101,7 +101,7 @@ func (cb *ControllerBase) RefreshVideoListHandler(c *gin.Context) {
 		cb.log.Debugln("---------------------------------")
 
 		// 缓存视频列表
-		cb.cronHelper.Downloader.SetMovieAndSeasonInfo(MovieInfos, SeasonInfos)
+		cb.cronHelper.Downloader().SetMovieAndSeasonInfo(MovieInfos, SeasonInfos)
 	}()
 
 	c.JSON(http.StatusOK, backend2.ReplyRefreshVideoList{
@@ -180,7 +180,7 @@ func (cb *ControllerBase) VideoListHandler(c *gin.Context) {
 		cb.ErrorProcess(c, "VideoListHandler", err)
 	}()
 
-	outMovieInfos, outSeasonInfo := cb.cronHelper.Downloader.GetMovieInfoAndSeasonInfo()
+	outMovieInfos, outSeasonInfo := cb.cronHelper.Downloader().GetMovieInfoAndSeasonInfo()
 
 	c.JSON(http.StatusOK, backend2.ReplyVideoList{
 		MovieInfos:  outMovieInfos,

@@ -59,7 +59,6 @@ func (cb *ControllerBase) GetPathUrlMap() map[string]string {
 }
 
 func (cb *ControllerBase) Close() {
-	cb.cronHelper.Stop()
 	cb.videoScanAndRefreshHelper.Cancel()
 	cb.videoScanAndRefreshHelperLocker.Close()
 }

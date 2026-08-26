@@ -27,12 +27,12 @@ func (cb *ControllerBase) SupplierDiagnosticsHandler(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, backendTypes.ReplySupplierDiagnostics{
 		Data:       buildSupplierDiagnostics(settings.Get(), subtitle_metrics.Snapshot(), used),
-		IsChecking: cb.cronHelper.Downloader.IsSupplierCheckRunning(), GeneratedAt: time.Now(),
+		IsChecking: cb.cronHelper.Downloader().IsSupplierCheckRunning(), GeneratedAt: time.Now(),
 	})
 }
 
 func (cb *ControllerBase) SupplierCheckHandler(c *gin.Context) {
-	if !cb.cronHelper.Downloader.StartSupplierCheckAsync() {
+	if !cb.cronHelper.Downloader().StartSupplierCheckAsync() {
 		c.JSON(http.StatusConflict, backendTypes.ReplyCommon{Message: "supplier check is already running"})
 		return
 	}

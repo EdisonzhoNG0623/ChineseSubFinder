@@ -14,12 +14,13 @@ func (ch *CronHelper) StatusSnapshot() StatusSnapshot {
 	cronInstance := ch.c
 	entryID := ch.entryIDScanVideoProcess
 	running := ch.cronHelperRunning
+	downloaderInstance := ch.downloader
 	ch.cronLock.Unlock()
 	if running && cronInstance != nil {
 		snapshot.NextScanAt = cronInstance.Entry(entryID).Next
 	}
-	if ch.Downloader != nil {
-		snapshot.ActiveWorkers = ch.Downloader.ActiveQueueWorkers()
+	if downloaderInstance != nil {
+		snapshot.ActiveWorkers = downloaderInstance.ActiveQueueWorkers()
 	}
 	return snapshot
 }

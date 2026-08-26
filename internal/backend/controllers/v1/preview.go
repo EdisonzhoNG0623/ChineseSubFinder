@@ -46,7 +46,7 @@ func (cb *ControllerBase) PreviewAdd(c *gin.Context) {
 		}
 	}
 
-	cb.cronHelper.Downloader.PreviewQueue.Add(&job)
+	cb.cronHelper.Downloader().PreviewQueue.Add(&job)
 	c.JSON(http.StatusOK, backend2.ReplyCommon{Message: "ok"})
 	return
 }
@@ -60,7 +60,7 @@ func (cb *ControllerBase) PreviewList(c *gin.Context) {
 		cb.ErrorProcess(c, "PreviewList", err)
 	}()
 
-	listJob := cb.cronHelper.Downloader.PreviewQueue.ListJob()
+	listJob := cb.cronHelper.Downloader().PreviewQueue.ListJob()
 	c.JSON(http.StatusOK, preview_queue.Reply{
 		Jobs: listJob,
 	})
@@ -80,7 +80,7 @@ func (cb *ControllerBase) PreviewIsJobInQueue(c *gin.Context) {
 		return
 	}
 
-	found := cb.cronHelper.Downloader.PreviewQueue.IsJobInQueue(&preview_queue.Job{
+	found := cb.cronHelper.Downloader().PreviewQueue.IsJobInQueue(&preview_queue.Job{
 		VideoFPath: job.VideoFPath,
 	})
 
@@ -102,7 +102,7 @@ func (cb *ControllerBase) PreviewJobResult(c *gin.Context) {
 		return
 	}
 
-	result := cb.cronHelper.Downloader.PreviewQueue.JobResult(&preview_queue.Job{
+	result := cb.cronHelper.Downloader().PreviewQueue.JobResult(&preview_queue.Job{
 		VideoFPath: job.VideoFPath,
 	})
 
@@ -124,7 +124,7 @@ func (cb *ControllerBase) PreviewGetExportInfo(c *gin.Context) {
 		return
 	}
 
-	m3u8, subPaths, err := cb.cronHelper.Downloader.PreviewQueue.GetVideoHLSAndSubByTimeRangeExportPathInfo(job.VideoFPath, job.SubFPaths, job.StartTime, job.EndTime)
+	m3u8, subPaths, err := cb.cronHelper.Downloader().PreviewQueue.GetVideoHLSAndSubByTimeRangeExportPathInfo(job.VideoFPath, job.SubFPaths, job.StartTime, job.EndTime)
 	if err != nil {
 		return
 	}
@@ -143,7 +143,7 @@ func (cb *ControllerBase) PreviewCleanUp(c *gin.Context) {
 		cb.ErrorProcess(c, "PreviewCleanUp", err)
 	}()
 
-	if len(cb.cronHelper.Downloader.PreviewQueue.ListJob()) > 0 {
+	if len(cb.cronHelper.Downloader().PreviewQueue.ListJob()) > 0 {
 		c.JSON(http.StatusOK, backend2.ReplyCommon{Message: "false"})
 		return
 	}

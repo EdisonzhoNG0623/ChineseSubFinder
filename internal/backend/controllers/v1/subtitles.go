@@ -64,7 +64,7 @@ func (cb *ControllerBase) ManualUploadSubtitle2Local(c *gin.Context) {
 		return
 	}
 
-	cb.cronHelper.Downloader.ManualUploadSub2Local.Add(&manual_upload_sub_2_local.Job{
+	cb.cronHelper.Downloader().ManualUploadSub2Local.Add(&manual_upload_sub_2_local.Job{
 		VideoFPath: videoFPath,
 		SubFPath:   filename,
 	})
@@ -81,7 +81,7 @@ func (cb *ControllerBase) ListManualUploadSubtitle2LocalJob(c *gin.Context) {
 		cb.ErrorProcess(c, "ListManualUploadSubtitle2LocalJob", err)
 	}()
 
-	listJob := cb.cronHelper.Downloader.ManualUploadSub2Local.ListJob()
+	listJob := cb.cronHelper.Downloader().ManualUploadSub2Local.ListJob()
 	c.JSON(http.StatusOK, manual_upload_sub_2_local.Reply{
 		Jobs: listJob,
 	})
@@ -102,7 +102,7 @@ func (cb *ControllerBase) IsManualUploadSubtitle2LocalJobInQueue(c *gin.Context)
 		return
 	}
 
-	found := cb.cronHelper.Downloader.ManualUploadSub2Local.IsJobInQueue(&manual_upload_sub_2_local.Job{
+	found := cb.cronHelper.Downloader().ManualUploadSub2Local.IsJobInQueue(&manual_upload_sub_2_local.Job{
 		VideoFPath: job.VideoFPath,
 	})
 
@@ -124,7 +124,7 @@ func (cb *ControllerBase) ManualUploadSubtitleResult(c *gin.Context) {
 		return
 	}
 
-	result := cb.cronHelper.Downloader.ManualUploadSub2Local.JobResult(&manual_upload_sub_2_local.Job{
+	result := cb.cronHelper.Downloader().ManualUploadSub2Local.JobResult(&manual_upload_sub_2_local.Job{
 		VideoFPath: job.VideoFPath,
 	})
 

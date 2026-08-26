@@ -66,6 +66,10 @@ func (b *BackEnd) start() {
 		b.logger.Errorln("Set Local Http Proxy Server Error:", err)
 		return
 	}
+	// Rebuild cancelled settings-dependent runtime state before exposing the
+	// refreshed routes. Start is non-blocking; supplier health checks continue
+	// asynchronously while the API reports their in-progress state.
+	b.doCornJob()
 	// -----------------------------------------
 	// 设置跨域
 	gin.SetMode(gin.ReleaseMode)
@@ -105,10 +109,7 @@ func (b *BackEnd) start() {
 		Addr:    fmt.Sprintf(":%d", b.httpPort),
 		Handler: engine,
 	}
-	go func() {
-		b.doPreJob()
-		b.doCornJob()
-	}()
+	go b.doPreJob()
 	// 启动 http server
 	go func() {
 		b.logger.Infoln("Try Start Http Server At Port", b.httpPort)
@@ -153,6 +154,10 @@ func (b *BackEnd) Restart() {
 			b.logger.Infoln("Http Server Shutdown Successfully")
 		}
 		b.logger.Infoln("Http Server Shutdown Done.")
+		// The HTTP controller no longer owns the process-wide scheduler. Stop it
+		// here so the next start can rebuild all settings-dependent runtime state
+		// (including the supplier hub) before serving the refreshed API.
+		b.cronHelper.Stop()
 	}
 
 	for {

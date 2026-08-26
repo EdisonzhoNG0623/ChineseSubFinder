@@ -65,7 +65,7 @@ func (cb *ControllerBase) RefreshMainList(c *gin.Context) {
 			cb.videoScanAndRefreshHelperErrMessage = err2.Error()
 			return
 		}
-		err2 = cb.cronHelper.Downloader.SetMovieAndSeasonInfoV2(mainList)
+		err2 = cb.cronHelper.Downloader().SetMovieAndSeasonInfoV2(mainList)
 		if err2 != nil {
 			cb.log.Errorln("SetMovieAndSeasonInfoV2", err2)
 			cb.videoScanAndRefreshHelperErrMessage = err2.Error()
@@ -86,7 +86,7 @@ func (cb *ControllerBase) VideoMainList(c *gin.Context) {
 		// 统一的异常处理
 		cb.ErrorProcess(c, "MoviePoster", err)
 	}()
-	outMovieInfos, outSeasonInfo, err := cb.cronHelper.Downloader.GetMovieInfoAndSeasonInfoV2()
+	outMovieInfos, outSeasonInfo, err := cb.cronHelper.Downloader().GetMovieInfoAndSeasonInfoV2()
 	if err != nil {
 		cb.log.Errorln("GetMovieInfoAndSeasonInfoV2", err)
 		return
@@ -269,7 +269,7 @@ func (cb *ControllerBase) ScanSkipInfo(c *gin.Context) {
 
 			isSkips := make([]bool, 0)
 			for _, videoSkipInfo := range videoSkipInfos.VideoSkipInfos {
-				isSkip := cb.cronHelper.Downloader.ScanLogic.Get(videoSkipInfo.VideoType, videoSkipInfo.PhysicalVideoFileFullPath)
+				isSkip := cb.cronHelper.Downloader().ScanLogic.Get(videoSkipInfo.VideoType, videoSkipInfo.PhysicalVideoFileFullPath)
 				isSkips = append(isSkips, isSkip)
 			}
 			c.JSON(http.StatusOK, backend2.ReplyVideoSkipInfo{
@@ -297,7 +297,7 @@ func (cb *ControllerBase) ScanSkipInfo(c *gin.Context) {
 					skipInfo = models.NewSkipScanInfoBySeriesEx(videoSkipInfo.PhysicalVideoFileFullPath, videoSkipInfo.IsSkip)
 				}
 
-				cb.cronHelper.Downloader.ScanLogic.Set(skipInfo)
+				cb.cronHelper.Downloader().ScanLogic.Set(skipInfo)
 			}
 
 			c.JSON(http.StatusOK, backend2.ReplyCommon{
