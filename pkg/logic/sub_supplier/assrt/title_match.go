@@ -191,7 +191,9 @@ func isReleaseMetadata(token, targetYear string) bool {
 	}
 
 	switch token {
-	case "bluray", "bdrip", "dvdrip", "hdtv", "web", "webdl", "webrip", "remux", "720p", "1080p", "2160p", "4k":
+	case "bluray", "bdrip", "dvdrip", "hdtv", "web", "webdl", "webrip", "remux", "720p", "1080p", "2160p", "4k",
+		"zip", "rar", "7z", "srt", "ass", "ssa", "sup", "vtt",
+		"chs", "cht", "eng", "zh", "cn", "gb", "big5", "simplified", "traditional", "简体", "繁体", "中文", "双语":
 		return true
 	default:
 		return false

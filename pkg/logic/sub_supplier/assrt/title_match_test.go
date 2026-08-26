@@ -126,6 +126,18 @@ func TestAssrtCandidateMatchesAbsoluteEpisode(t *testing.T) {
 	}
 }
 
+func TestAssrtCandidateMatchesBilingualArchiveExtension(t *testing.T) {
+	mediaInfo := &models.MediaInfo{TitleCn: "家庭教师", TitleEn: "REBORN!", OriginalTitle: "家庭教師ヒットマンREBORN!", Year: "2006"}
+	for _, candidate := range []string{
+		"家庭教師ヒットマンREBORN!",
+		"家庭教師ヒットマンREBORN！.zip",
+	} {
+		if !assrtCandidateMatchesMediaForEpisodes(mediaInfo, candidate, []int{48}) {
+			t.Fatalf("matching bilingual archive title %q was rejected", candidate)
+		}
+	}
+}
+
 func TestAssrtProviderSearchPlanPrioritizesAiredAndBareAbsolute(t *testing.T) {
 	mediaInfo := &models.MediaInfo{TitleCn: "妖精的尾巴", TitleEn: "Fairy Tail", OriginalTitle: "Fairy Tail"}
 	plan := assrtProviderSearchPlan(mediaInfo, 8, 11, 288)
