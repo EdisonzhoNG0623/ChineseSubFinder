@@ -295,7 +295,7 @@ func (d *SubSupplierHub) dlSubFromSeriesInfo(ctx context.Context, seriesDirPath 
 		return nil, err
 	}
 
-	organizeSubFiles, err := sub_helper.OrganizeDlSubFiles(d.log, filepath.Base(seriesDirPath), subInfos, false)
+	organizeSubFiles, err := sub_helper.OrganizeDlSubFilesForSeries(d.log, filepath.Base(seriesDirPath), subInfos, seriesInfo)
 	if err != nil {
 		return nil, errors.Newf("OrganizeDlSubFiles %v %v", seriesDirPath, err)
 	}

@@ -1,6 +1,8 @@
 package archive_helper
 
 import (
+	"archive/zip"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +11,69 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/unit_test_helper"
 )
+
+func TestUnArchiveFileRejectsPathTraversal(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "unsafe.zip")
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	entry, err := writer.Create("../escaped.srt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = entry.Write([]byte("subtitle")); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	destination := filepath.Join(root, "output")
+	_ = UnArchiveFile(archivePath, destination)
+	if _, err = os.Stat(filepath.Join(root, "escaped.srt")); !os.IsNotExist(err) {
+		t.Fatal("path traversal entry escaped the extraction root")
+	}
+}
+
+func TestSafeArchiveDestinationRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	for _, entry := range []string{"../escaped.srt", `..\escaped.srt`, "/absolute.srt"} {
+		if destination, err := safeArchiveDestination(root, entry); err == nil {
+			t.Fatalf("unsafe entry %q resolved to %q", entry, destination)
+		}
+	}
+}
+
+func TestSafeArchiveDestinationAllowsNestedSubtitle(t *testing.T) {
+	root := t.TempDir()
+	got, err := safeArchiveDestination(root, "Season 04/35.ass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "Season 04", "35.ass")
+	if got != want {
+		t.Fatalf("destination = %q, want %q", got, want)
+	}
+}
+
+func TestExtractionBudgetRejectsOversizedArchive(t *testing.T) {
+	budget := &extractionBudget{}
+	if err := budget.consume(maxExtractedArchiveBytes + 1); err == nil {
+		t.Fatal("oversized expanded archive was accepted")
+	}
+}
+
+func TestIsWantedArchiveExtNameRecognizes7z(t *testing.T) {
+	if !IsWantedArchiveExtName("season.7z") {
+		t.Fatal(".7z archive was not recognized")
+	}
+}
 
 func TestUnArchiveFile(t *testing.T) {
 

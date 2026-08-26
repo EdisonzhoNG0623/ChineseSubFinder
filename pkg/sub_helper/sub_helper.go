@@ -12,12 +12,12 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/subparser"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/supplier"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/archive_helper"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/episode_identity"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/filter"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/language"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/regex_things"
@@ -28,10 +28,24 @@ import (
 
 // OrganizeDlSubFiles 需要从汇总来是网站字幕中，解压对应的压缩包中的字幕出来
 func OrganizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []supplier.SubInfo, isMovie bool) (map[string][]string, error) {
+	return organizeDlSubFiles(log, tmpFolderName, subInfos, isMovie, nil)
+}
+
+// OrganizeDlSubFilesForSeries adds the local episode inventory to archive
+// extraction. The inventory lets weak but common names such as "简_35.ass"
+// map safely while rejecting numbers that do not identify a local episode.
+func OrganizeDlSubFilesForSeries(log *logrus.Logger, tmpFolderName string, subInfos []supplier.SubInfo,
+	seriesInfo *series.SeriesInfo) (map[string][]string, error) {
+	return organizeDlSubFiles(log, tmpFolderName, subInfos, false, seriesInfo)
+}
+
+func organizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []supplier.SubInfo, isMovie bool,
+	seriesInfo *series.SeriesInfo) (map[string][]string, error) {
 
 	// 缓存列表，整理后的字幕列表
 	// SxEx - []string 字幕的路径
 	var siteSubInfoDict = make(map[string][]string)
+	episodeResolver := newSeriesEpisodeResolver(seriesInfo)
 	tmpFolderFullPath, err := pkg.GetTmpFolderByName(tmpFolderName)
 	if err != nil {
 		return nil, err
@@ -69,7 +83,10 @@ func OrganizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []sup
 		} else {
 			// 那么就是需要解压的文件了
 			// 解压，给一个单独的文件夹
-			unzipTmpFolder := filepath.Join(tmpFolderFullPath, subInfos[i].FromWhere)
+			// Keep every downloaded archive isolated. Reusing one supplier folder
+			// allowed an unmatched file from archive A to be reconsidered with
+			// archive B's episode metadata.
+			unzipTmpFolder := filepath.Join(tmpFolderFullPath, subInfos[i].FromWhere, strconv.Itoa(i))
 			err = os.MkdirAll(unzipTmpFolder, os.ModePerm)
 			if err != nil {
 				return nil, err
@@ -86,17 +103,58 @@ func OrganizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []sup
 				log.Errorln("searchMatchedSubFile", subInfos[i].FromWhere, subInfos[i].Name, subInfos[i].TopN, err)
 				continue
 			}
+			archiveSource := subInfos[i]
+			collectionResolutions := make(map[string][2]int, len(subFileFullPaths))
+			if !isMovie && !archiveSource.IsFullSeason && archiveSource.Episode > 0 {
+				// Some providers label a collection with the requested episode. Only
+				// reclassify it when at least four different inventory episodes can
+				// be resolved; this avoids treating language/copy counters as episodes.
+				collectionSource := archiveSource
+				collectionSource.IsFullSeason = true
+				collectionSource.Episode = 0
+				distinctEpisodes := make(map[string]struct{})
+				for _, fileFullPath := range subFileFullPaths {
+					relativePath, relErr := filepath.Rel(unzipTmpFolder, fileFullPath)
+					if relErr != nil {
+						relativePath = filepath.Base(fileFullPath)
+					}
+					season, episode, matched := episodeResolver.Resolve(relativePath, collectionSource)
+					if !matched {
+						continue
+					}
+					collectionResolutions[fileFullPath] = [2]int{season, episode}
+					distinctEpisodes[pkg.GetEpisodeKeyName(season, episode)] = struct{}{}
+				}
+				if len(distinctEpisodes) >= 4 {
+					archiveSource = collectionSource
+					log.Infof("subtitle archive recognized as collection: supplier=%s files=%d mapped_episodes=%d",
+						subInfos[i].FromWhere, len(subFileFullPaths), len(distinctEpisodes))
+				} else {
+					collectionResolutions = nil
+				}
+			}
+
+			mappedFiles := 0
+			unmatchedFiles := 0
 			// 这里需要给这些下载到的文件进行改名，加是从那个网站来的前缀，后续好查找
 			for _, fileFullPath := range subFileFullPaths {
 				if isMovie == false {
 					// 连续剧的情况
 					// 从解压的文件名称推断 Season 和 Episode 信息
-					nowSeason, nowEps, matched := resolveOrganizedSubtitleEpisode(filepath.Base(fileFullPath), subInfos[i])
+					relativePath, relErr := filepath.Rel(unzipTmpFolder, fileFullPath)
+					if relErr != nil {
+						relativePath = filepath.Base(fileFullPath)
+					}
+					nowSeason, nowEps, matched := episodeResolver.Resolve(relativePath, archiveSource)
+					if resolution, found := collectionResolutions[fileFullPath]; found {
+						nowSeason, nowEps, matched = resolution[0], resolution[1], true
+					}
 					if !matched {
+						unmatchedFiles++
 						continue
 					}
 					newSubName := AddFrontName(subInfos[i], filepath.Base(fileFullPath))
-					newSubNameFullPath := filepath.Join(tmpFolderFullPath, newSubName)
+					newSubNameFullPath := uniqueOrganizedSubtitlePath(tmpFolderFullPath, newSubName)
 					// 改名
 					err = os.Rename(fileFullPath, newSubNameFullPath)
 					if err != nil {
@@ -111,6 +169,7 @@ func OrganizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []sup
 						siteSubInfoDict[SEPKey] = make([]string, 0)
 					}
 					siteSubInfoDict[SEPKey] = append(siteSubInfoDict[SEPKey], newSubNameFullPath)
+					mappedFiles++
 				} else {
 					// 电影的情况
 					newSubName := AddFrontName(subInfos[i], filepath.Base(fileFullPath))
@@ -126,6 +185,10 @@ func OrganizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []sup
 				}
 
 			}
+			if !isMovie {
+				log.Infof("subtitle archive episode mapping: supplier=%s extracted=%d mapped=%d unmatched=%d",
+					subInfos[i].FromWhere, len(subFileFullPaths), mappedFiles, unmatchedFiles)
+			}
 		}
 	}
 
@@ -133,15 +196,22 @@ func OrganizeDlSubFiles(log *logrus.Logger, tmpFolderName string, subInfos []sup
 }
 
 func resolveOrganizedSubtitleEpisode(fileName string, source supplier.SubInfo) (int, int, bool) {
-	if source.Season > 0 && source.Episode > 0 && source.AbsoluteEpisode > 0 &&
-		episode_identity.FilenameContainsAbsoluteEpisode(fileName, source.AbsoluteEpisode) {
-		return source.Season, source.Episode, true
+	return newSeriesEpisodeResolver(nil).Resolve(fileName, source)
+}
+
+func uniqueOrganizedSubtitlePath(root, fileName string) string {
+	candidate := filepath.Join(root, fileName)
+	if _, err := os.Stat(candidate); os.IsNotExist(err) {
+		return candidate
 	}
-	_, season, episode, err := decode.GetSeasonAndEpisodeFromSubFileName(fileName)
-	if err != nil || season <= 0 || episode <= 0 {
-		return 0, 0, false
+	ext := filepath.Ext(fileName)
+	stem := strings.TrimSuffix(fileName, ext)
+	for index := 2; ; index++ {
+		candidate = filepath.Join(root, stem+"_"+strconv.Itoa(index)+ext)
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
 	}
-	return season, episode, true
 }
 
 // ChangeVideoExt2SubExt 检测 Name，如果是视频的后缀名就改为字幕的后缀名

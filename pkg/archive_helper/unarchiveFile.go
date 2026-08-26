@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -20,11 +21,23 @@ import (
 	"golang.org/x/text/transform"
 )
 
+const (
+	maxArchiveFiles          = 5000
+	maxExtractedFileBytes    = 32 << 20
+	maxExtractedArchiveBytes = 256 << 20
+)
+
+type extractionBudget struct {
+	files int
+	bytes int64
+}
+
 // UnArchiveFileEx 发现打包的字幕内部还有一层压缩包···所以···
 func UnArchiveFileEx(fileFullPath, desRootPath string) error {
+	budget := &extractionBudget{}
 
 	// 先进行一次解压
-	err := UnArchiveFile(fileFullPath, desRootPath)
+	err := unArchiveFile(fileFullPath, desRootPath, budget)
 	if err != nil {
 		return err
 	}
@@ -33,11 +46,16 @@ func UnArchiveFileEx(fileFullPath, desRootPath string) error {
 		// 判断一次
 		needUnzipFileFPaths := make([]string, 0)
 		err = filepath.Walk(desRootPath, func(path string, info fs.FileInfo, err error) error {
-
+			if err != nil {
+				return err
+			}
+			if info == nil {
+				return nil
+			}
 			if info.IsDir() == true {
 				return nil
 			}
-			nowExt := filepath.Ext(path)
+			nowExt := strings.ToLower(filepath.Ext(path))
 			// 然后对于解压的内容再次进行判断
 			if nowExt != ".zip" && nowExt != ".tar" && nowExt != ".rar" && nowExt != ".7z" {
 				return nil
@@ -51,7 +69,7 @@ func UnArchiveFileEx(fileFullPath, desRootPath string) error {
 		}
 		// 如果有压缩包，那么就继续解压，然后删除压缩包
 		for _, needUnzipFileFPath := range needUnzipFileFPaths {
-			err = UnArchiveFile(needUnzipFileFPath, desRootPath)
+			err = unArchiveFile(needUnzipFileFPath, desRootPath, budget)
 			if err != nil {
 				return err
 			}
@@ -85,6 +103,10 @@ func UnArchiveFileEx(fileFullPath, desRootPath string) error {
 // UnArchiveFile 7z 以外的都能搞定中文编码的问题，但是 7z 有梗，需要单独的库去解析，且编码是解决不了的，以后他们搞定了再测试
 // 所以效果就是，7z 外的压缩包文件解压ok，字幕可以正常从名称解析出是简体还是繁体，但是7z就没办法了，一定乱码
 func UnArchiveFile(fileFullPath, desRootPath string) error {
+	return unArchiveFile(fileFullPath, desRootPath, &extractionBudget{})
+}
+
+func unArchiveFile(fileFullPath, desRootPath string, budget *extractionBudget) error {
 	switch filepath.Ext(strings.ToLower(fileFullPath)) {
 	case ".zip":
 		z := archiver.Zip{
@@ -101,13 +123,13 @@ func UnArchiveFile(fileFullPath, desRootPath string) error {
 			}
 			zfh, ok := f.Header.(zip.FileHeader)
 			if ok {
-				err := processOneFile(f, zfh.NonUTF8, desRootPath)
+				err := processOneFile(f, zfh.NonUTF8, desRootPath, budget)
 				if err != nil {
 					return err
 				}
 			} else {
 				// 需要检测文件名是否是乱码
-				err := processOneFile(f, !utf8.ValidString(f.Name()), desRootPath)
+				err := processOneFile(f, !utf8.ValidString(f.Name()), desRootPath, budget)
 				if err != nil {
 					return err
 				}
@@ -129,7 +151,7 @@ func UnArchiveFile(fileFullPath, desRootPath string) error {
 			if f.IsDir() == true {
 				return nil
 			}
-			err := processOneFile(f, false, desRootPath)
+			err := processOneFile(f, false, desRootPath, budget)
 			if err != nil {
 				return err
 			}
@@ -150,7 +172,7 @@ func UnArchiveFile(fileFullPath, desRootPath string) error {
 			if f.IsDir() == true {
 				return nil
 			}
-			err := processOneFile(f, false, desRootPath)
+			err := processOneFile(f, false, desRootPath, budget)
 			if err != nil {
 				return err
 			}
@@ -161,7 +183,7 @@ func UnArchiveFile(fileFullPath, desRootPath string) error {
 			return err
 		}
 	case ".7z":
-		return unArr7z(fileFullPath, desRootPath)
+		return unArr7z(fileFullPath, desRootPath, budget)
 	default:
 		return errors.New("not support un archive file ext")
 	}
@@ -169,7 +191,7 @@ func UnArchiveFile(fileFullPath, desRootPath string) error {
 	return nil
 }
 
-func processOneFile(f archiver.File, notUTF8 bool, desRootPath string) error {
+func processOneFile(f archiver.File, notUTF8 bool, desRootPath string, budget *extractionBudget) error {
 	decodeName := f.Name()
 	if notUTF8 == true {
 
@@ -183,28 +205,28 @@ func processOneFile(f archiver.File, notUTF8 bool, desRootPath string) error {
 		decodeName = string(content)
 		//decodeName = string(ouBytes)
 	}
-	var chunk []byte
-	buf := make([]byte, 1024)
-	for {
-		n, err := f.Read(buf)
-		if err != nil && err != io.EOF {
-			return err
-		}
-		//说明读取结束
-		if n == 0 {
-			break
-		}
-		//读取到最终的缓冲区中
-		chunk = append(chunk, buf[:n]...)
+	destination, err := safeArchiveDestination(desRootPath, decodeName)
+	if err != nil {
+		return err
 	}
-	err := pkg.WriteFile(filepath.Join(desRootPath, decodeName), chunk)
+	chunk, err := io.ReadAll(io.LimitReader(f, maxExtractedFileBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(chunk) > maxExtractedFileBytes {
+		return fmt.Errorf("archive entry exceeds %d bytes: %q", maxExtractedFileBytes, decodeName)
+	}
+	if err = budget.consume(int64(len(chunk))); err != nil {
+		return err
+	}
+	err = pkg.WriteFile(destination, chunk)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func unArr7z(fileFullPath, desRootPath string) error {
+func unArr7z(fileFullPath, desRootPath string, budget *extractionBudget) error {
 
 	r, err := sevenzip.OpenReader(fileFullPath)
 	if err != nil {
@@ -213,7 +235,7 @@ func unArr7z(fileFullPath, desRootPath string) error {
 	defer r.Close()
 
 	for _, file := range r.File {
-		err = un7zOneFile(file, desRootPath)
+		err = un7zOneFile(file, desRootPath, budget)
 		if err != nil {
 			return err
 		}
@@ -222,29 +244,68 @@ func unArr7z(fileFullPath, desRootPath string) error {
 	return nil
 }
 
-func un7zOneFile(file *sevenzip.File, desRootPath string) error {
+func un7zOneFile(file *sevenzip.File, desRootPath string, budget *extractionBudget) error {
 	rc, err := file.Open()
 	if err != nil {
 		return err
 	}
 	defer rc.Close()
 
-	data, err := io.ReadAll(rc)
+	data, err := io.ReadAll(io.LimitReader(rc, maxExtractedFileBytes+1))
 	if err != nil {
+		return err
+	}
+	if len(data) > maxExtractedFileBytes {
+		return fmt.Errorf("archive entry exceeds %d bytes: %q", maxExtractedFileBytes, file.Name)
+	}
+	if err = budget.consume(int64(len(data))); err != nil {
 		return err
 	}
 	decodeName := file.Name
 	decodeName = filepath.Base(decodeName)
-	err = pkg.WriteFile(filepath.Join(desRootPath, decodeName), data)
+	destination, err := safeArchiveDestination(desRootPath, decodeName)
+	if err != nil {
+		return err
+	}
+	err = pkg.WriteFile(destination, data)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
+func (b *extractionBudget) consume(size int64) error {
+	b.files++
+	b.bytes += size
+	if b.files > maxArchiveFiles {
+		return fmt.Errorf("archive contains more than %d files", maxArchiveFiles)
+	}
+	if b.bytes > maxExtractedArchiveBytes {
+		return fmt.Errorf("archive expands beyond %d bytes", maxExtractedArchiveBytes)
+	}
+	return nil
+}
+
+func safeArchiveDestination(root, entryName string) (string, error) {
+	entryName = strings.ReplaceAll(entryName, `\`, "/")
+	if strings.TrimSpace(entryName) == "" || strings.ContainsRune(entryName, '\x00') || filepath.IsAbs(entryName) {
+		return "", fmt.Errorf("unsafe archive entry path %q", entryName)
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	destination := filepath.Join(rootAbs, filepath.Clean(filepath.FromSlash(entryName)))
+	relative, err := filepath.Rel(rootAbs, destination)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("unsafe archive entry path %q", entryName)
+	}
+	return destination, nil
+}
+
 func IsWantedArchiveExtName(fileName string) bool {
 	switch strings.ToLower(filepath.Ext(fileName)) {
-	case ".zip", ".tar", ".rar", "7z":
+	case ".zip", ".tar", ".rar", ".7z":
 		return true
 	default:
 		return false

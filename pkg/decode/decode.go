@@ -517,12 +517,12 @@ func GetSeasonAndEpisodeFromSubFileName(videoFileName string) (bool, int, int, e
 	upperName := strings.ToUpper(videoFileName)
 	// 先进行单个 Episode 的匹配
 	// Killing.Eve.S02E01.Do.You.Know.How
-	var re = regexp.MustCompile(`(?m)[\.\s]S(\d+).*?E(\d+)[\.\s]`)
+	var re = regexp.MustCompile(`(?im)(?:^|[\.\s_\-\[\]\(\)])S(\d+).*?E(\d+)(?:[\.\s_\-\[\]\(\)]|$)`)
 	matched := re.FindAllStringSubmatch(upperName, -1)
 	if matched == nil || len(matched) < 1 {
 		// Killing.Eve.S02.Do.You.Know.How
 		// 看看是不是季度字幕打包
-		re = regexp.MustCompile(`(?m)[\.\s]S(\d+)[\.\s]`)
+		re = regexp.MustCompile(`(?im)(?:^|[\.\s_\-\[\]\(\)])S(\d+)(?:[\.\s_\-\[\]\(\)]|$)`)
 		matched = re.FindAllStringSubmatch(upperName, -1)
 		if matched == nil || len(matched) < 1 {
 			return false, 0, 0, nil

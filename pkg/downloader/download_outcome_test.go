@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/task_queue"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
 )
 
 func TestSeriesDownloadOutcomeError(t *testing.T) {
@@ -84,6 +85,27 @@ func TestFullSeasonEpisodeSubs(t *testing.T) {
 				t.Fatalf("fullSeasonEpisodeSubs(%q) found = %t, want %t", test.episode, found, test.wantFound)
 			}
 		})
+	}
+}
+
+func TestMappedCollectionEpisodesKeepsOnlySeriesInventory(t *testing.T) {
+	organized := map[string][]string{
+		"S4E35": {"/cache/35.ass"},
+		"S4E36": {"/cache/36.ass"},
+		"S4E99": {"/cache/99.ass"},
+		"S4E0":  {"/cache/unresolved.ass"},
+	}
+	info := &series.SeriesInfo{EpList: []series.EpisodeInfo{
+		{Season: 4, Episode: 35},
+		{Season: 4, Episode: 36},
+	}}
+
+	got := mappedCollectionEpisodes(info, organized)
+	if len(got) != 2 || len(got["S4E35"]) != 1 || len(got["S4E36"]) != 1 {
+		t.Fatalf("mapped collection = %#v", got)
+	}
+	if _, exists := got["S4E99"]; exists {
+		t.Fatal("episode outside the local series inventory was retained")
 	}
 }
 

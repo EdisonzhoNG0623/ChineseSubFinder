@@ -152,6 +152,32 @@ func TestGetSeasonAndEpisodeFromFileName(t *testing.T) {
 	t.Logf("\n\n%t\t S%dE%d\n", b, s, e)
 }
 
+func TestGetSeasonAndEpisodeFromFileNameBoundaries(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileName    string
+		wantSeason  int
+		wantEpisode int
+		wantPack    bool
+	}{
+		{name: "token at end", fileName: "Show.S04E35", wantSeason: 4, wantEpisode: 35},
+		{name: "underscore separators", fileName: "Show_S04_E36.ass", wantSeason: 4, wantEpisode: 36},
+		{name: "bracket separators", fileName: "[S04E37] Show.ass", wantSeason: 4, wantEpisode: 37},
+		{name: "season package at end", fileName: "Show S04", wantSeason: 4, wantPack: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pack, season, episode, err := GetSeasonAndEpisodeFromSubFileName(test.fileName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pack != test.wantPack || season != test.wantSeason || episode != test.wantEpisode {
+				t.Fatalf("parsed (%t,%d,%d), want (%t,%d,%d)", pack, season, episode, test.wantPack, test.wantSeason, test.wantEpisode)
+			}
+		})
+	}
+}
+
 func TestGetNumber2Float(t *testing.T) {
 	testString := "asd&^%1998.2jh aweo "
 	outNumber, err := GetNumber2Float(testString)

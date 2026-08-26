@@ -2,6 +2,7 @@ package subhd
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -12,6 +13,8 @@ import (
 )
 
 const subHDMaxSearchQueries = 12
+
+var subHDCollectionRange = regexp.MustCompile(`(?i)(?:^|[^0-9])[0-9]{1,4}[[:space:]]*[-~～—至][[:space:]]*[0-9]{1,4}(?:[^0-9]|$)`)
 
 type subHDSearchQuery struct {
 	Keyword string
@@ -155,4 +158,34 @@ func subHDTargetSeasons(seriesInfo *series.SeriesInfo) []int {
 	}
 	sort.Ints(seasons)
 	return seasons
+}
+
+func subHDTitleMatchesSeason(title string, season int) bool {
+	if season <= 0 {
+		return false
+	}
+	upper := strings.ToUpper(strings.Join(strings.Fields(title), " "))
+	seasonTokens := []string{
+		fmt.Sprintf("第%d季", season),
+		"第" + zh.Uint64(season).String() + "季",
+		fmt.Sprintf("SEASON %d", season),
+		fmt.Sprintf("SEASON %02d", season),
+	}
+	for _, token := range seasonTokens {
+		if strings.Contains(upper, strings.ToUpper(token)) {
+			return true
+		}
+	}
+	sToken := regexp.MustCompile(fmt.Sprintf(`(?:^|[^A-Z0-9])S0*%d(?:[^0-9]|$)`, season))
+	return sToken.MatchString(upper)
+}
+
+func subHDTitleLooksLikeCollection(title string) bool {
+	lower := strings.ToLower(title)
+	for _, marker := range []string{"合集", "全集", "全季", "complete", "batch", "collection", "season pack"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return subHDCollectionRange.MatchString(title)
 }

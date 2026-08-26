@@ -251,6 +251,7 @@ func (s *Supplier) getSubListFromFile4Series(seriesInfo *series.SeriesInfo, anim
 			return nil, err
 		}
 		for _, item := range oneSubList {
+			item.SeasonHint = season
 			key := item.BaseUrl + "|" + item.Url + "|" + item.Title
 			if _, exists := seenListItems[key]; exists {
 				continue
@@ -270,6 +271,11 @@ func (s *Supplier) getSubListFromFile4Series(seriesInfo *series.SeriesInfo, anim
 			s.log.Errorln(s.GetSupplierName(), "GetEx", item.Title, item.Season, item.Episode, err)
 			continue
 		}
+		// Cached files may carry metadata from an older request for the same URL.
+		// The current selection is authoritative for this series run.
+		subInfo.Season = item.Season
+		subInfo.Episode = item.Episode
+		subInfo.IsFullSeason = item.Season > 0 && item.Episode == 0
 
 		subInfos = append(subInfos, *subInfo)
 	}
@@ -398,6 +404,21 @@ func (s *Supplier) whichEpisodeNeedDownloadSub(seriesInfo *series.SeriesInfo, al
 		if err != nil {
 			// Anime archives often expose only an absolute episode number. Keep
 			// the item available for the absolute matcher below.
+			continue
+		}
+		if season <= 0 {
+			for targetSeason := range seriesInfo.NeedDlSeasonDict {
+				if subHDTitleMatchesSeason(subInfo.Title, targetSeason) {
+					season, episode = targetSeason, 0
+					break
+				}
+			}
+		}
+		if season <= 0 && subInfo.SeasonHint > 0 &&
+			seriesInfo.NeedDlSeasonDict[subInfo.SeasonHint] > 0 && subHDTitleLooksLikeCollection(subInfo.Title) {
+			season, episode = subInfo.SeasonHint, 0
+		}
+		if season <= 0 {
 			continue
 		}
 		subInfo.Season = season
@@ -1106,6 +1127,7 @@ type HdListItem struct {
 	DownCount  int    `json:"downCount"`
 	Season     int    // 第几季，默认-1
 	Episode    int    // 第几集，默认-1
+	SeasonHint int    // 搜索计划命中的本地季，仅用于无法从整季标题直接解析时
 }
 
 //type HdContent struct {

@@ -12,7 +12,6 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/subparser"
 
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
 	subcommon "github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_formatter/common"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_helper"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
@@ -131,15 +130,17 @@ func (d *Downloader) oneVideoSelectBestSub(oneVideoFullPath string, organizeSubF
 
 // saveFullSeasonSub 这里就需要单独存储到连续剧每一季的文件夹的特殊文件夹中。需要跟 DeleteOneSeasonSubCacheFolder 关联起来
 func (d *Downloader) saveFullSeasonSub(seriesInfo *series.SeriesInfo, organizeSubFiles map[string][]string) map[string][]string {
-
-	var fullSeasonSubDict = make(map[string][]string)
-
-	for _, season := range seriesInfo.SeasonDict {
-		seasonKey := pkg.GetEpisodeKeyName(season, 0)
-		subs, ok := organizeSubFiles[seasonKey]
-		if ok == false {
-			continue
-		}
+	fullSeasonSubDict := mappedCollectionEpisodes(seriesInfo, organizeSubFiles)
+	if len(fullSeasonSubDict) < 2 {
+		return map[string][]string{}
+	}
+	episodesByKey := make(map[string]series.EpisodeInfo, len(seriesInfo.EpList))
+	for _, episode := range seriesInfo.EpList {
+		episodesByKey[pkg.GetEpisodeKeyName(episode.Season, episode.Episode)] = episode
+	}
+	for episodeKey, subs := range fullSeasonSubDict {
+		episode := episodesByKey[episodeKey]
+		seasonKey := pkg.GetEpisodeKeyName(episode.Season, 0)
 		for _, sub := range subs {
 			subFileName := filepath.Base(sub)
 
@@ -157,21 +158,31 @@ func (d *Downloader) saveFullSeasonSub(seriesInfo *series.SeriesInfo, organizeSu
 				d.log.Errorln("saveFullSeasonSub.CopyFile", subFileName, err)
 				continue
 			}
-			// 从字幕的文件名推断是 哪一季 的 那一集
-			_, gusSeason, gusEpisode, err := decode.GetSeasonAndEpisodeFromSubFileName(subFileName)
-			if err != nil {
-				return nil
-			}
-			// 把整季的字幕缓存位置也提供出去，如果之前没有下载到的，这里返回出来的可以补上
-			seasonEpsKey := pkg.GetEpisodeKeyName(gusSeason, gusEpisode)
-			_, ok := fullSeasonSubDict[seasonEpsKey]
-			if ok == false {
-				// 初始化
-				fullSeasonSubDict[seasonEpsKey] = make([]string, 0)
-			}
-			fullSeasonSubDict[seasonEpsKey] = append(fullSeasonSubDict[seasonEpsKey], sub)
 		}
 	}
 
 	return fullSeasonSubDict
+}
+
+func mappedCollectionEpisodes(seriesInfo *series.SeriesInfo, organizeSubFiles map[string][]string) map[string][]string {
+	out := make(map[string][]string)
+	if seriesInfo == nil {
+		return out
+	}
+	inventory := make(map[string]struct{}, len(seriesInfo.EpList))
+	for _, episode := range seriesInfo.EpList {
+		if episode.Season > 0 && episode.Episode > 0 {
+			inventory[pkg.GetEpisodeKeyName(episode.Season, episode.Episode)] = struct{}{}
+		}
+	}
+	for episodeKey, subtitles := range organizeSubFiles {
+		if len(subtitles) == 0 {
+			continue
+		}
+		if _, exists := inventory[episodeKey]; !exists {
+			continue
+		}
+		out[episodeKey] = append([]string(nil), subtitles...)
+	}
+	return out
 }

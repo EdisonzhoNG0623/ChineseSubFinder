@@ -53,3 +53,40 @@ func TestBestSubHDItemIsDeterministic(t *testing.T) {
 		t.Fatalf("bestSubHDItem() = %#v, %v", got, ok)
 	}
 }
+
+func TestWhichEpisodeNeedDownloadSubSelectsChineseSeasonPackage(t *testing.T) {
+	supplier := &Supplier{log: logrus.New()}
+	seriesInfo := &series.SeriesInfo{
+		NeedDlSeasonDict: map[int]int{4: 4},
+		NeedDlEpsKeyList: map[string]series.EpisodeInfo{
+			"S4E35": {Season: 4, Episode: 35},
+		},
+	}
+	items := []HdListItem{
+		{Title: "家庭教师 REBORN! 第四季 简繁字幕合集", Url: "/season-four", DownCount: 10},
+		{Title: "家庭教师 REBORN! 第三季 简繁字幕合集", Url: "/wrong-season", DownCount: 100},
+	}
+
+	got := supplier.whichEpisodeNeedDownloadSub(seriesInfo, items)
+	if len(got) != 1 || got[0].Url != "/season-four" || got[0].Season != 4 || got[0].Episode != 0 {
+		t.Fatalf("season package match = %#v", got)
+	}
+}
+
+func TestWhichEpisodeNeedDownloadSubUsesSearchSeasonHintForCollection(t *testing.T) {
+	supplier := &Supplier{log: logrus.New()}
+	seriesInfo := &series.SeriesInfo{
+		NeedDlSeasonDict: map[int]int{4: 4},
+		NeedDlEpsKeyList: map[string]series.EpisodeInfo{
+			"S4E35": {Season: 4, Episode: 35},
+		},
+	}
+	items := []HdListItem{
+		{Title: "家庭教师 REBORN! 074-101 简繁合集", Url: "/collection", DownCount: 10, SeasonHint: 4},
+	}
+
+	got := supplier.whichEpisodeNeedDownloadSub(seriesInfo, items)
+	if len(got) != 1 || got[0].Season != 4 || got[0].Episode != 0 {
+		t.Fatalf("hinted collection match = %#v", got)
+	}
+}
