@@ -1,6 +1,7 @@
 package series_helper
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -10,6 +11,28 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/supplier"
 	"github.com/sirupsen/logrus"
 )
+
+type dispatchSeriesSupplier struct {
+	seriesCalls int
+	animeCalls  int
+}
+
+func (s *dispatchSeriesSupplier) CheckAlive() (bool, int64)    { return true, 0 }
+func (s *dispatchSeriesSupplier) IsAlive() bool                { return true }
+func (s *dispatchSeriesSupplier) GetSupplierName() string      { return "dispatch" }
+func (s *dispatchSeriesSupplier) OverDailyDownloadLimit() bool { return false }
+func (s *dispatchSeriesSupplier) GetLogger() *logrus.Logger    { return log_helper.GetLogger4Tester() }
+func (s *dispatchSeriesSupplier) GetSubListFromFile4Movie(string) ([]supplier.SubInfo, error) {
+	return nil, nil
+}
+func (s *dispatchSeriesSupplier) GetSubListFromFile4Series(*series.SeriesInfo) ([]supplier.SubInfo, error) {
+	s.seriesCalls++
+	return nil, nil
+}
+func (s *dispatchSeriesSupplier) GetSubListFromFile4Anime(*series.SeriesInfo) ([]supplier.SubInfo, error) {
+	s.animeCalls++
+	return nil, nil
+}
 
 type concurrentSeriesSupplier struct {
 	name    string
@@ -73,5 +96,15 @@ func TestDownloadSubtitleInAllSiteByOneSeriesRunsSuppliersConcurrentlyAndIsolate
 		}
 	case <-time.After(time.Second):
 		t.Fatal("concurrent supplier call did not finish")
+	}
+}
+
+func TestDownloadFromSeriesSupplierDispatchesAnime(t *testing.T) {
+	supplier := &dispatchSeriesSupplier{}
+	if _, err := downloadFromSeriesSupplier(context.Background(), supplier, &series.SeriesInfo{IsAnime: true}); err != nil {
+		t.Fatal(err)
+	}
+	if supplier.animeCalls != 1 || supplier.seriesCalls != 0 {
+		t.Fatalf("anime calls=%d series calls=%d", supplier.animeCalls, supplier.seriesCalls)
 	}
 }

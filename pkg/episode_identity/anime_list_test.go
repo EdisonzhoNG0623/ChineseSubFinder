@@ -84,3 +84,22 @@ func TestAnimeListResolverFallsBackToNormalizedTitle(t *testing.T) {
 		t.Fatalf("unexpected title identity: %#v", identity)
 	}
 }
+
+func TestAnimeListResolverRecognizesSeriesWithoutCustomSeasonMapping(t *testing.T) {
+	resolver, err := ParseAnimeList(strings.NewReader(`<?xml version="1.0"?><anime-list>
+  <anime anidbid="4747" tvdbid="80975" defaulttvdbseason="1" tmdbtv="45857">
+    <name>Katekyou Hitman Reborn!</name>
+  </anime>
+</anime-list>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Request{IDs: ExternalIDs{TVDB: "80975"}, Season: 4, Episode: 35}
+	if _, err = resolver.Resolve(context.Background(), request); !errors.Is(err, ErrNoMapping) {
+		t.Fatalf("custom season unexpectedly resolved: %v", err)
+	}
+	matched, err := resolver.MatchesSeries(context.Background(), request)
+	if err != nil || !matched {
+		t.Fatalf("series match = %t, %v; want true", matched, err)
+	}
+}

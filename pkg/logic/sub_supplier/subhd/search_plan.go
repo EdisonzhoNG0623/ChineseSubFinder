@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/internal/models"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/episode_identity"
@@ -14,11 +15,15 @@ import (
 
 const subHDMaxSearchQueries = 12
 
-var subHDCollectionRange = regexp.MustCompile(`(?i)(?:^|[^0-9])[0-9]{1,4}[[:space:]]*[-~～—至][[:space:]]*[0-9]{1,4}(?:[^0-9]|$)`)
+var (
+	subHDCollectionRange = regexp.MustCompile(`(?i)(?:^|[^0-9])[0-9]{1,4}[[:space:]]*[-~～—至][[:space:]]*[0-9]{1,4}(?:[^0-9]|$)`)
+	subHDTitleYear       = regexp.MustCompile(`(?i)[(（]?(?:19|20)[0-9]{2}[)）]?`)
+)
 
 type subHDSearchQuery struct {
 	Keyword string
 	Kind    string
+	Alias   string
 }
 
 func subHDSeriesAliases(mediaInfo *models.MediaInfo, seriesInfo *series.SeriesInfo) []string {
@@ -39,7 +44,7 @@ func subHDSeriesAliases(mediaInfo *models.MediaInfo, seriesInfo *series.SeriesIn
 func buildSubHDSearchPlan(aliases []string, season int, episodes []series.EpisodeInfo, anime bool) []subHDSearchQuery {
 	queries := make([]subHDSearchQuery, 0, subHDMaxSearchQueries)
 	seen := make(map[string]struct{}, subHDMaxSearchQueries)
-	appendQuery := func(kind, keyword string) {
+	appendQuery := func(kind, keyword, alias string) {
 		keyword = strings.Join(strings.Fields(keyword), " ")
 		if keyword == "" || len(queries) >= subHDMaxSearchQueries {
 			return
@@ -49,13 +54,13 @@ func buildSubHDSearchPlan(aliases []string, season int, episodes []series.Episod
 			return
 		}
 		seen[key] = struct{}{}
-		queries = append(queries, subHDSearchQuery{Keyword: keyword, Kind: kind})
+		queries = append(queries, subHDSearchQuery{Keyword: keyword, Kind: kind, Alias: alias})
 	}
 
 	aliases = uniqueSubHDAliases(aliases)
 	if season > 0 {
 		for _, alias := range aliases {
-			appendQuery("season_cn", fmt.Sprintf("%s 第%s季", alias, zh.Uint64(season).String()))
+			appendQuery("season_cn", fmt.Sprintf("%s 第%s季", alias, zh.Uint64(season).String()), alias)
 		}
 	}
 
@@ -76,32 +81,43 @@ func buildSubHDSearchPlan(aliases []string, season int, episodes []series.Episod
 			// them ahead of E/EP/# forms so they survive the provider budget.
 			for _, query := range plan {
 				if query.Kind == episode_identity.QueryAired {
-					appendQuery(strings.ToLower(string(query.Kind)), query.Query)
+					appendQuery(strings.ToLower(string(query.Kind)), query.Query, subHDExpectedAlias(query.Query, aliases))
 				}
 			}
 			bareSuffix := fmt.Sprintf(" %d", episode.AbsoluteEpisode)
 			for _, query := range plan {
 				if query.Kind == episode_identity.QueryAbsolute && strings.HasSuffix(query.Query, bareSuffix) {
-					appendQuery(strings.ToLower(string(query.Kind)), query.Query)
+					appendQuery(strings.ToLower(string(query.Kind)), query.Query, subHDExpectedAlias(query.Query, aliases))
 				}
 			}
 			for _, query := range plan {
 				if query.Kind != episode_identity.QueryAired &&
 					!(query.Kind == episode_identity.QueryAbsolute && strings.HasSuffix(query.Query, bareSuffix)) {
-					appendQuery(strings.ToLower(string(query.Kind)), query.Query)
+					appendQuery(strings.ToLower(string(query.Kind)), query.Query, subHDExpectedAlias(query.Query, aliases))
 				}
 			}
 		}
 	}
 	if season > 0 {
 		for _, alias := range aliases {
-			appendQuery("season_token", fmt.Sprintf("%s S%02d", alias, season))
+			appendQuery("season_token", fmt.Sprintf("%s S%02d", alias, season), alias)
 		}
 	}
 	for _, alias := range aliases {
-		appendQuery("series", alias)
+		appendQuery("series", alias, alias)
 	}
 	return queries
+}
+
+func subHDExpectedAlias(query string, aliases []string) string {
+	query = strings.ToLower(strings.Join(strings.Fields(query), " "))
+	for _, alias := range aliases {
+		normalized := strings.ToLower(strings.Join(strings.Fields(alias), " "))
+		if query == normalized || strings.HasPrefix(query, normalized+" ") {
+			return alias
+		}
+	}
+	return ""
 }
 
 func uniqueSubHDAliases(aliases []string) []string {
@@ -120,6 +136,24 @@ func uniqueSubHDAliases(aliases []string) []string {
 		out = append(out, alias)
 	}
 	return out
+}
+
+func subHDSearchResultMatchesAlias(resultTitle, alias string) bool {
+	normalize := func(value string) string {
+		value = subHDTitleYear.ReplaceAllString(strings.ToLower(value), "")
+		return strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				return r
+			}
+			return -1
+		}, value)
+	}
+	resultTitle = normalize(resultTitle)
+	alias = normalize(alias)
+	if len([]rune(alias)) < 2 || resultTitle == "" {
+		return false
+	}
+	return strings.Contains(resultTitle, alias)
 }
 
 func episodesForSeason(seriesInfo *series.SeriesInfo, season int) []series.EpisodeInfo {

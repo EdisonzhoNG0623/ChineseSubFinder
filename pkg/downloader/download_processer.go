@@ -8,6 +8,7 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 
 	taskQueue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
 
@@ -109,6 +110,7 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 		d.completeSeriesBatch(batchJobs, nil, nil, err)
 		return err
 	}
+	seriesInfo.IsAnime = job.VideoType == common.Anime
 	primaryEpisodeKey := pkg.GetEpisodeKeyName(job.Season, job.Episode)
 	if _, stillNeeded := seriesInfo.NeedDlEpsKeyList[primaryEpisodeKey]; !stillNeeded {
 		job.JobStatus = taskQueue2.Ignore

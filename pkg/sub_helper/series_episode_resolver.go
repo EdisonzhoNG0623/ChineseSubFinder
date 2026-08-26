@@ -48,6 +48,9 @@ func newSeriesEpisodeResolver(info *series.SeriesInfo) seriesEpisodeResolver {
 	for _, episode := range info.NeedDlEpsKeyList {
 		resolver.add(episode)
 	}
+	for _, episode := range info.ArchiveEpList {
+		resolver.add(episode)
+	}
 	return resolver
 }
 

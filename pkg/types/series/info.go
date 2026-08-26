@@ -10,14 +10,20 @@ import (
 所以命名很标注，使用 GetVideoInfoFromFileName 读取 SxxExx 问题不大
 */
 type SeriesInfo struct {
-	ImdbId           string
-	TmdbId           string
-	TvdbId           string
-	Name             string
-	Aliases          []string
-	Year             int
-	ReleaseDate      string
-	EpList           []EpisodeInfo
+	ImdbId      string
+	TmdbId      string
+	TvdbId      string
+	Name        string
+	Aliases     []string
+	Year        int
+	ReleaseDate string
+	EpList      []EpisodeInfo
+	// ArchiveEpList is the complete local episode inventory used only when a
+	// multi-episode archive must be mapped. Queue-scoped downloads may keep
+	// EpList intentionally small without making season-package parsing blind to
+	// the rest of the library.
+	ArchiveEpList    []EpisodeInfo
+	IsAnime          bool
 	DirPath          string
 	SeasonDict       map[int]int
 	NeedDlSeasonDict map[int]int

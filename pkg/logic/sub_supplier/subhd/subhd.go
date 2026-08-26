@@ -518,7 +518,7 @@ func (s *Supplier) step0(browser *rod.Browser, keyword string) (string, error) {
 // step0WithCacheability distinguishes a confirmed empty result from an
 // inconclusive rate-limit page. Both look like an empty search to the current
 // call, but only a confirmed empty page is safe to negative-cache.
-func (s *Supplier) step0WithCacheability(browser *rod.Browser, keyword string) (string, bool, error) {
+func (s *Supplier) step0WithCacheability(browser *rod.Browser, keyword string, expectedAlias ...string) (string, bool, error) {
 	var err error
 	defer func() {
 		if err != nil {
@@ -541,40 +541,54 @@ func (s *Supplier) step0WithCacheability(browser *rod.Browser, keyword string) (
 		return "", false, err
 	}
 	imgSelection := doc.Find("img.rounded-start")
-	_, ok := imgSelection.Attr("src")
-	if ok == true {
-
-		if len(imgSelection.Nodes) < 1 {
-			return "", false, common.SubHDStep0ImgParentLessThan1
+	if imgSelection.Size() > 0 {
+		alias := ""
+		if len(expectedAlias) > 0 {
+			alias = expectedAlias[0]
 		}
-		step1Url := ""
-		if imgSelection.Nodes[0].Parent.Data == "a" {
-			// 第一个父级是不是超链接
-			for _, attribute := range imgSelection.Nodes[0].Parent.Attr {
-				if attribute.Key == "href" {
-					step1Url = attribute.Val
-					break
+		matchedImage := false
+		step1URL := ""
+		imgSelection.EachWithBreak(func(_ int, image *goquery.Selection) bool {
+			if alias != "" {
+				title, exists := image.Attr("alt")
+				if !exists || !subHDSearchResultMatchesAlias(title, alias) {
+					return true
 				}
 			}
-		} else if imgSelection.Nodes[0].Parent.Parent.Data == "a" {
-			// 第二个父级是不是超链接
-			for _, attribute := range imgSelection.Nodes[0].Parent.Parent.Attr {
-				if attribute.Key == "href" {
-					step1Url = attribute.Val
-					break
-				}
-			}
+			matchedImage = true
+			step1URL = subHDImageDetailURL(image)
+			return step1URL == ""
+		})
+		if step1URL != "" {
+			return step1URL, true, nil
 		}
-		if step1Url == "" {
-			return "", false, common.SubHDStep0HrefIsNull
+		if alias != "" && !matchedImage {
+			return "", true, nil
 		}
-		return step1Url, true, nil
+		return "", false, common.SubHDStep0HrefIsNull
 	} else {
 		// A page without a detail link may be a real empty result or a
 		// rate-limit response. Preserve the old empty-result behavior for this
 		// call, but only let the caller cache an explicit zero-result page.
 		return "", subHDSearchPageHasNoResults(result), nil
 	}
+}
+
+func subHDImageDetailURL(image *goquery.Selection) string {
+	for parent := image.Parent(); parent.Length() > 0; parent = parent.Parent() {
+		if goquery.NodeName(parent) == "a" {
+			if href, exists := parent.Attr("href"); exists {
+				if strings.HasPrefix(href, "/d/") {
+					return href
+				}
+				return ""
+			}
+		}
+		if parent.Parent().Length() == 0 {
+			break
+		}
+	}
+	return ""
 }
 
 // step1 获取影片的详情字幕列表

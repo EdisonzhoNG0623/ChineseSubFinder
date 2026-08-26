@@ -22,7 +22,7 @@ func (s *Supplier) ensureSearchCache() *subHDSearchCache {
 }
 
 func (s *Supplier) cachedStep0(browser *rod.Browser, query subHDSearchQuery) (string, error) {
-	cacheKey := settings.Get().AdvancedSettings.SuppliersSettings.SubHD.RootUrl + "|" + query.Keyword
+	cacheKey := settings.Get().AdvancedSettings.SuppliersSettings.SubHD.RootUrl + "|" + query.Keyword + "|" + query.Alias
 	if detailURL, ok := s.ensureSearchCache().getDetail(cacheKey); ok {
 		subtitle_metrics.RecordCacheHit(common.SubSiteSubHd)
 		if detailURL == "" {
@@ -33,7 +33,7 @@ func (s *Supplier) cachedStep0(browser *rod.Browser, query subHDSearchQuery) (st
 		return detailURL, nil
 	}
 
-	detailURL, cacheable, err := s.step0WithCacheability(browser, query.Keyword)
+	detailURL, cacheable, err := s.step0WithCacheability(browser, query.Keyword, query.Alias)
 	if err != nil {
 		return "", err
 	}

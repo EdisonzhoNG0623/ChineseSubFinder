@@ -6,6 +6,7 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/internal/models"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
+	"github.com/PuerkitoBio/goquery"
 )
 
 func TestSubHDSeriesAliasesDeduplicatesMetadata(t *testing.T) {
@@ -93,5 +94,43 @@ func TestSubHDTargetSeasonsFallsBackToEpisodeMap(t *testing.T) {
 	got := subHDTargetSeasons(info)
 	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("subHDTargetSeasons() = %#v", got)
+	}
+}
+
+func TestSubHDSearchResultAliasRejectsSubtitleKeywordCollision(t *testing.T) {
+	if subHDSearchResultMatchesAlias("闪电侠 第四季 The Flash", "REBORN!") {
+		t.Fatal("subtitle episode-title keyword collision matched the wrong series")
+	}
+	if !subHDSearchResultMatchesAlias("家庭教师HITMAN REBORN!", "家庭教师HITMAN REBORN! (2006)") {
+		t.Fatal("year-suffixed local alias did not match the correct series")
+	}
+}
+
+func TestBuildSubHDSearchPlanKeepsExpectedAlias(t *testing.T) {
+	plan := buildSubHDSearchPlan([]string{"REBORN!"}, 4, nil, true)
+	if len(plan) == 0 || plan[0].Alias != "REBORN!" {
+		t.Fatalf("search plan alias = %#v", plan)
+	}
+}
+
+func TestSubHDImageDetailURLAcceptsOnlyDetailLinks(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		html string
+		want string
+	}{
+		{name: "detail", html: `<a href="/d/26952099"><img class="rounded-start" alt="The Flash"></a>`, want: "/d/26952099"},
+		{name: "download", html: `<a href="/a/Nu12wz"><img class="rounded-start" alt="The Flash"></a>`},
+		{name: "external", html: `<a href="https://example.com/d/1"><img class="rounded-start" alt="The Flash"></a>`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doc, err := goquery.NewDocumentFromReader(strings.NewReader(test.html))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := subHDImageDetailURL(doc.Find("img")); got != test.want {
+				t.Fatalf("detail URL = %q, want %q", got, test.want)
+			}
+		})
 	}
 }

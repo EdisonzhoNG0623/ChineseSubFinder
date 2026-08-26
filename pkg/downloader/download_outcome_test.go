@@ -109,6 +109,20 @@ func TestMappedCollectionEpisodesKeepsOnlySeriesInventory(t *testing.T) {
 	}
 }
 
+func TestMappedCollectionEpisodesUsesCompleteArchiveInventory(t *testing.T) {
+	info := &series.SeriesInfo{
+		EpList:        []series.EpisodeInfo{{Season: 1, Episode: 29}},
+		ArchiveEpList: []series.EpisodeInfo{{Season: 1, Episode: 1}, {Season: 1, Episode: 29}},
+	}
+	got := mappedCollectionEpisodes(info, map[string][]string{
+		"S1E1":  {"/cache/01.srt"},
+		"S1E29": {"/cache/29.srt"},
+	})
+	if len(got) != 2 || len(got["S1E1"]) != 1 || len(got["S1E29"]) != 1 {
+		t.Fatalf("complete archive inventory was not retained: %#v", got)
+	}
+}
+
 func TestSeriesRequestedEpisodeOutcome(t *testing.T) {
 	saveErr := errors.New("save failed")
 	tests := []struct {

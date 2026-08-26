@@ -134,8 +134,9 @@ func (d *Downloader) saveFullSeasonSub(seriesInfo *series.SeriesInfo, organizeSu
 	if len(fullSeasonSubDict) < 2 {
 		return map[string][]string{}
 	}
-	episodesByKey := make(map[string]series.EpisodeInfo, len(seriesInfo.EpList))
-	for _, episode := range seriesInfo.EpList {
+	inventory := append(append([]series.EpisodeInfo(nil), seriesInfo.ArchiveEpList...), seriesInfo.EpList...)
+	episodesByKey := make(map[string]series.EpisodeInfo, len(inventory))
+	for _, episode := range inventory {
 		episodesByKey[pkg.GetEpisodeKeyName(episode.Season, episode.Episode)] = episode
 	}
 	for episodeKey, subs := range fullSeasonSubDict {
@@ -169,8 +170,9 @@ func mappedCollectionEpisodes(seriesInfo *series.SeriesInfo, organizeSubFiles ma
 	if seriesInfo == nil {
 		return out
 	}
-	inventory := make(map[string]struct{}, len(seriesInfo.EpList))
-	for _, episode := range seriesInfo.EpList {
+	allEpisodes := append(append([]series.EpisodeInfo(nil), seriesInfo.ArchiveEpList...), seriesInfo.EpList...)
+	inventory := make(map[string]struct{}, len(allEpisodes))
+	for _, episode := range allEpisodes {
 		if episode.Season > 0 && episode.Episode > 0 {
 			inventory[pkg.GetEpisodeKeyName(episode.Season, episode.Episode)] = struct{}{}
 		}

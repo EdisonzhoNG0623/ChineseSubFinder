@@ -135,6 +135,14 @@ func (r *AnimeListResolver) ResolveCandidates(_ context.Context, request Request
 	return resolved, nil
 }
 
+func (r *AnimeListResolver) MatchesSeries(_ context.Context, request Request) (bool, error) {
+	if strings.TrimSpace(request.IDs.TMDB) == "" && strings.TrimSpace(request.IDs.TVDB) == "" &&
+		strings.TrimSpace(request.IDs.IMDb) == "" && len(request.Aliases) == 0 && strings.TrimSpace(request.SeriesName) == "" {
+		return false, errors.New("at least one stable series ID or title alias is required")
+	}
+	return len(r.candidateIndexes(request)) > 0, nil
+}
+
 func (r *AnimeListResolver) indexEntry(index map[string][]int, id string, entryIndex int) {
 	id = normalizeExternalID(id)
 	if id == "" {
@@ -274,6 +282,14 @@ func (r *CachedAnimeListResolver) ResolveCandidates(ctx context.Context, request
 		return nil, err
 	}
 	return resolver.ResolveCandidates(ctx, request)
+}
+
+func (r *CachedAnimeListResolver) MatchesSeries(ctx context.Context, request Request) (bool, error) {
+	resolver, err := r.load(ctx)
+	if err != nil {
+		return false, err
+	}
+	return resolver.MatchesSeries(ctx, request)
 }
 
 func (r *CachedAnimeListResolver) load(ctx context.Context) (*AnimeListResolver, error) {

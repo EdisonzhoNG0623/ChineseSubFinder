@@ -19,6 +19,10 @@ type ISeriesSupplierContext interface {
 	GetSubListFromFile4SeriesContext(context.Context, *series.SeriesInfo) ([]supplier.SubInfo, error)
 }
 
+type IAnimeSupplierContext interface {
+	GetSubListFromFile4AnimeContext(context.Context, *series.SeriesInfo) ([]supplier.SubInfo, error)
+}
+
 type ISupplier interface {
 	CheckAlive() (bool, int64)
 

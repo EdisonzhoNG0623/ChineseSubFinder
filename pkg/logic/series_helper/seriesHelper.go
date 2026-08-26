@@ -3,6 +3,7 @@ package series_helper
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -124,8 +125,18 @@ func ReadSeriesInfoFromDir(dealers *media_info_dealers.Dealers,
 	}
 	// 视频字典 S01E01 - EpisodeInfo
 	EpisodeDict := make(map[string]series.EpisodeInfo)
+	archiveEpisodeDict := make(map[string]series.EpisodeInfo)
 	for _, videoFile := range videoFiles {
-		getEpsInfoAndSubDic(dealers.Logger, videoFile, EpisodeDict, SubDict, epsMap...)
+		episode, recognized := getEpsInfoAndSubDic(dealers.Logger, videoFile, EpisodeDict, SubDict, epsMap...)
+		if len(epsMap) > 0 && recognized && episode.Season > 0 && episode.Episode > 0 {
+			key := pkg.GetEpisodeKeyName(episode.Season, episode.Episode)
+			if _, exists := archiveEpisodeDict[key]; !exists {
+				archiveEpisodeDict[key] = episode
+			}
+		}
+	}
+	if len(epsMap) > 0 {
+		seriesInfo.ArchiveEpList = sortedEpisodeInventory(archiveEpisodeDict)
 	}
 
 	for _, episodeInfo := range EpisodeDict {
@@ -136,6 +147,20 @@ func ReadSeriesInfoFromDir(dealers *media_info_dealers.Dealers,
 	seriesInfo.NeedDlEpsKeyList, seriesInfo.NeedDlSeasonDict = whichSeasonEpsNeedDownloadSub(dealers.Logger, seriesInfo, ExpirationTime, forcedScanAndDownloadSub)
 
 	return seriesInfo, nil
+}
+
+func sortedEpisodeInventory(byEpisode map[string]series.EpisodeInfo) []series.EpisodeInfo {
+	out := make([]series.EpisodeInfo, 0, len(byEpisode))
+	for _, episode := range byEpisode {
+		out = append(out, episode)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Season != out[j].Season {
+			return out[i].Season < out[j].Season
+		}
+		return out[i].Episode < out[j].Episode
+	})
+	return out
 }
 
 // ReadSeriesInfoFromEmby 将 Emby API 读取到的数据进行转换到通用的结构中，需要填充那些剧集需要下载，这样要的是一个连续剧的，不是所有的传入(只有那些 Eps 需要下载字幕的 NeedDlEpsKeyList)
@@ -229,12 +254,7 @@ func DownloadSubtitleInAllSiteByOneSeriesContext(ctx context.Context, logger *lo
 	}
 	outSUbInfos, searchErr := supplier_search.RunContext(ctx, logger, Suppliers, supplier_search.NewSearchID("series"), fastEnough,
 		func(searchCtx context.Context, oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
-			if contextual, ok := oneSupplier.(ifaces.ISeriesSupplierContext); ok {
-				subInfos, err := contextual.GetSubListFromFile4SeriesContext(searchCtx, seriesInfo)
-				sub_helper.ChangeVideoExt2SubExt(subInfos)
-				return subInfos, err
-			}
-			subInfos, err := oneSupplier.GetSubListFromFile4Series(seriesInfo)
+			subInfos, err := downloadFromSeriesSupplier(searchCtx, oneSupplier, seriesInfo)
 			sub_helper.ChangeVideoExt2SubExt(subInfos)
 			return subInfos, err
 		})
@@ -248,6 +268,20 @@ func DownloadSubtitleInAllSiteByOneSeriesContext(ctx context.Context, logger *lo
 	}
 
 	return outSUbInfos, searchErr
+}
+
+func downloadFromSeriesSupplier(ctx context.Context, oneSupplier ifaces.ISupplier,
+	seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	if seriesInfo != nil && seriesInfo.IsAnime {
+		if contextual, ok := oneSupplier.(ifaces.IAnimeSupplierContext); ok {
+			return contextual.GetSubListFromFile4AnimeContext(ctx, seriesInfo)
+		}
+		return oneSupplier.GetSubListFromFile4Anime(seriesInfo)
+	}
+	if contextual, ok := oneSupplier.(ifaces.ISeriesSupplierContext); ok {
+		return contextual.GetSubListFromFile4SeriesContext(ctx, seriesInfo)
+	}
+	return oneSupplier.GetSubListFromFile4Series(seriesInfo)
 }
 
 // GetSeriesListFromDirs 获取这个目录下的所有文件夹名称，默认为一个连续剧的目录的List
@@ -434,19 +468,28 @@ func getEpsInfoAndSubDic(logger *logrus.Logger,
 	videoFile string,
 	EpisodeDict map[string]series.EpisodeInfo,
 	SubDict map[string][]series.SubInfo,
-	epsMap ...map[int][]int) {
+	epsMap ...map[int][]int) (series.EpisodeInfo, bool) {
 	// 正常来说，一集只有一个格式的视频，也就是 S01E01 只有一个，如果有多个则会只保存第一个
 	episodeInfo, modifyTime, err := decode.GetVideoInfoFromFileFullPath(videoFile, false)
 	if err != nil {
 		logger.Errorln("model.GetVideoInfoFromFileFullPath", videoFile, err)
-		return
+		return series.EpisodeInfo{}, false
+	}
+	oneFileEpInfo := series.EpisodeInfo{
+		Title:        episodeInfo.Title,
+		Season:       episodeInfo.Season,
+		Episode:      episodeInfo.Episode,
+		Dir:          filepath.Dir(videoFile),
+		FileFullPath: videoFile,
+		ModifyTime:   modifyTime,
+		AiredTime:    episodeInfo.ReleaseDate,
 	}
 
 	if len(epsMap) > 0 {
 		// 如果这个视频不在需要下载的 Eps 列表中，那么就跳过后续的逻辑
 		epsList, ok := epsMap[0][episodeInfo.Season]
 		if ok == false {
-			return
+			return oneFileEpInfo, true
 		}
 		found := false
 		for _, oneEpsID := range epsList {
@@ -457,7 +500,7 @@ func getEpsInfoAndSubDic(logger *logrus.Logger,
 			}
 		}
 		if found == false {
-			return
+			return oneFileEpInfo, true
 		}
 	}
 
@@ -465,15 +508,6 @@ func getEpsInfoAndSubDic(logger *logrus.Logger,
 	_, ok := EpisodeDict[epsKey]
 	if ok == false {
 		// 初始化
-		oneFileEpInfo := series.EpisodeInfo{
-			Title:        episodeInfo.Title,
-			Season:       episodeInfo.Season,
-			Episode:      episodeInfo.Episode,
-			Dir:          filepath.Dir(videoFile),
-			FileFullPath: videoFile,
-			ModifyTime:   modifyTime,
-			AiredTime:    episodeInfo.ReleaseDate,
-		}
 		// 需要匹配同级目录下的字幕
 		oneFileEpInfo.SubAlreadyDownloadedList = make([]series.SubInfo, 0)
 		for _, subInfo := range SubDict[epsKey] {
@@ -484,7 +518,7 @@ func getEpsInfoAndSubDic(logger *logrus.Logger,
 		EpisodeDict[epsKey] = oneFileEpInfo
 	} else {
 		// 存在则跳过
-		return
+		return oneFileEpInfo, true
 	}
-	return
+	return oneFileEpInfo, true
 }

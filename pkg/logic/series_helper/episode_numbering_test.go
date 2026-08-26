@@ -41,6 +41,18 @@ type ambiguousIdentityResolver struct {
 	candidates []episode_identity.Identity
 }
 
+type matchingAnimeResolver struct {
+	matched bool
+}
+
+func (r matchingAnimeResolver) Resolve(context.Context, episode_identity.Request) (episode_identity.Identity, error) {
+	return episode_identity.Identity{}, episode_identity.ErrNoMapping
+}
+
+func (r matchingAnimeResolver) MatchesSeries(context.Context, episode_identity.Request) (bool, error) {
+	return r.matched, nil
+}
+
 func (r ambiguousIdentityResolver) Resolve(context.Context, episode_identity.Request) (episode_identity.Identity, error) {
 	return episode_identity.Identity{}, errors.New("ambiguous mapping")
 }
@@ -115,5 +127,80 @@ func TestEnrichSeriesEpisodeNumberingAbstainsWithoutChangingEpisode(t *testing.T
 	count, err := enrichSeriesEpisodeNumberingWithResolvers(context.Background(), resolver, episode_identity.DisabledAmbiguityResolver{}, seriesInfo)
 	if err != nil || count != 0 || seriesInfo.NeedDlEpsKeyList["S1E1"].AbsoluteEpisode != 0 {
 		t.Fatalf("abstention must preserve deterministic state: count=%d err=%v info=%#v", count, err, seriesInfo)
+	}
+}
+
+func TestContiguousInventoryAbsoluteFallbackMapsSplitAnimeSeasons(t *testing.T) {
+	inventory := make([]series.EpisodeInfo, 0, 154)
+	for season, count := range []int{33, 32, 8, 68, 13} {
+		for episode := 1; episode <= count; episode++ {
+			inventory = append(inventory, series.EpisodeInfo{Season: season + 1, Episode: episode})
+		}
+	}
+	info := &series.SeriesInfo{
+		IsAnime:       true,
+		ArchiveEpList: inventory,
+		EpList:        []series.EpisodeInfo{{Season: 4, Episode: 35}, {Season: 4, Episode: 36}},
+		NeedDlEpsKeyList: map[string]series.EpisodeInfo{
+			"S4E35": {Season: 4, Episode: 35},
+			"S4E36": {Season: 4, Episode: 36},
+		},
+	}
+	if got := applyContiguousInventoryAbsoluteFallback(info); got != 2 {
+		t.Fatalf("resolved count = %d, want 2", got)
+	}
+	if got := info.NeedDlEpsKeyList["S4E35"]; got.AbsoluteEpisode != 108 || got.NumberingSource != "local contiguous season inventory" {
+		t.Fatalf("S4E35 fallback = %#v, want absolute 108", got)
+	}
+	if got := info.NeedDlEpsKeyList["S4E36"].AbsoluteEpisode; got != 109 {
+		t.Fatalf("S4E36 absolute = %d, want 109", got)
+	}
+}
+
+func TestContiguousInventoryAbsoluteFallbackRejectsGap(t *testing.T) {
+	info := &series.SeriesInfo{
+		IsAnime: true,
+		ArchiveEpList: []series.EpisodeInfo{
+			{Season: 1, Episode: 1}, {Season: 1, Episode: 3}, {Season: 2, Episode: 1},
+		},
+		NeedDlEpsKeyList: map[string]series.EpisodeInfo{"S2E1": {Season: 2, Episode: 1}},
+	}
+	if got := applyContiguousInventoryAbsoluteFallback(info); got != 0 || info.NeedDlEpsKeyList["S2E1"].AbsoluteEpisode != 0 {
+		t.Fatalf("gapped inventory must abstain: count=%d info=%#v", got, info)
+	}
+}
+
+func TestContiguousInventoryAbsoluteFallbackRejectsOrdinarySeries(t *testing.T) {
+	info := &series.SeriesInfo{
+		ArchiveEpList:    []series.EpisodeInfo{{Season: 1, Episode: 1}, {Season: 2, Episode: 1}},
+		NeedDlEpsKeyList: map[string]series.EpisodeInfo{"S2E1": {Season: 2, Episode: 1}},
+	}
+	if got := applyContiguousInventoryAbsoluteFallback(info); got != 0 {
+		t.Fatalf("ordinary series fallback count = %d, want 0", got)
+	}
+}
+
+func TestContiguousInventoryAbsoluteFallbackAbstainsForNewestSeason(t *testing.T) {
+	info := &series.SeriesInfo{
+		IsAnime: true,
+		ArchiveEpList: []series.EpisodeInfo{
+			{Season: 1, Episode: 1}, {Season: 1, Episode: 2}, {Season: 2, Episode: 1},
+		},
+		NeedDlEpsKeyList: map[string]series.EpisodeInfo{"S2E1": {Season: 2, Episode: 1}},
+	}
+	if got := applyContiguousInventoryAbsoluteFallback(info); got != 0 {
+		t.Fatalf("newest season fallback count = %d, want 0", got)
+	}
+}
+
+func TestDetectAnimeSeriesUsesResolverMetadata(t *testing.T) {
+	info := &series.SeriesInfo{TvdbId: "80975", Name: "家庭教师HITMAN REBORN!"}
+	matched, err := detectAnimeSeries(context.Background(), matchingAnimeResolver{matched: true}, info)
+	if err != nil || !matched {
+		t.Fatalf("anime metadata match = %t, %v", matched, err)
+	}
+	matched, err = detectAnimeSeries(context.Background(), matchingAnimeResolver{matched: false}, info)
+	if err != nil || matched {
+		t.Fatalf("ordinary metadata match = %t, %v", matched, err)
 	}
 }

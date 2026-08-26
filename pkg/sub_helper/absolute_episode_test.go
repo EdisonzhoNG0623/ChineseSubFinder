@@ -64,6 +64,20 @@ func TestSeriesEpisodeResolverMapsUniqueAbsoluteNumber(t *testing.T) {
 	}
 }
 
+func TestSeriesEpisodeResolverUsesCompleteArchiveInventoryOutsideQueueBatch(t *testing.T) {
+	resolver := newSeriesEpisodeResolver(&series.SeriesInfo{
+		EpList: []series.EpisodeInfo{{Season: 1, Episode: 29, AbsoluteEpisode: 29}},
+		ArchiveEpList: []series.EpisodeInfo{
+			{Season: 1, Episode: 1, AbsoluteEpisode: 1},
+			{Season: 1, Episode: 29, AbsoluteEpisode: 29},
+		},
+	})
+	season, episode, ok := resolver.Resolve("01.srt", supplier.SubInfo{Season: 1, Episode: 0, IsFullSeason: true})
+	if !ok || season != 1 || episode != 1 {
+		t.Fatalf("archive inventory resolution = (%d,%d,%v), want (1,1,true)", season, episode, ok)
+	}
+}
+
 func TestSeriesEpisodeResolverRejectsAmbiguousAiredAndAbsoluteNumber(t *testing.T) {
 	resolver := newSeriesEpisodeResolver(&series.SeriesInfo{EpList: []series.EpisodeInfo{
 		{Season: 4, Episode: 35, AbsoluteEpisode: 116},

@@ -54,6 +54,12 @@ type CandidateResolver interface {
 	ResolveCandidates(ctx context.Context, request Request) ([]Identity, error)
 }
 
+// SeriesMatcher reports whether a resolver recognizes a series even when it
+// cannot map the caller's custom season split to one absolute episode.
+type SeriesMatcher interface {
+	MatchesSeries(ctx context.Context, request Request) (bool, error)
+}
+
 // ResolverFunc makes deterministic and test resolvers easy to inject without
 // coupling suppliers to a concrete metadata service.
 type ResolverFunc func(context.Context, Request) (Identity, error)

@@ -27,18 +27,149 @@ func enrichSeriesEpisodeNumbering(logger *logrus.Logger, seriesInfo *series.Seri
 	}
 	resolver, err := defaultAnimeEpisodeResolver()
 	if err != nil {
+		fallbackCount := 0
+		if seriesInfo.IsAnime {
+			fallbackCount = applyContiguousInventoryAbsoluteFallback(seriesInfo)
+		}
+		if fallbackCount > 0 {
+			logger.Infof("resolved absolute episode numbering for %d episode(s) via contiguous local inventory", fallbackCount)
+			return nil
+		}
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	resolved, err := enrichSeriesEpisodeNumberingWithResolvers(ctx, resolver, ai_ambiguity.ConfiguredResolver(), seriesInfo)
-	if err != nil {
-		return err
+	matchedAnime, matchErr := detectAnimeSeries(ctx, resolver, seriesInfo)
+	if matchErr != nil {
+		return matchErr
 	}
+	if !matchedAnime {
+		return nil
+	}
+	if !seriesInfo.IsAnime {
+		seriesInfo.IsAnime = true
+		logger.Infof("series classified as anime via Anime-Lists metadata")
+	}
+	resolved, resolveErr := enrichSeriesEpisodeNumberingWithResolvers(ctx, resolver, ai_ambiguity.ConfiguredResolver(), seriesInfo)
 	if resolved > 0 {
 		logger.Infof("resolved absolute episode numbering for %d episode(s) via Anime-Lists", resolved)
 	}
+	fallbackCount := applyContiguousInventoryAbsoluteFallback(seriesInfo)
+	if fallbackCount > 0 {
+		logger.Infof("resolved absolute episode numbering for %d episode(s) via contiguous local inventory", fallbackCount)
+	}
+	if resolveErr != nil && fallbackCount == 0 {
+		return resolveErr
+	}
 	return nil
+}
+
+func detectAnimeSeries(ctx context.Context, resolver episode_identity.Resolver, seriesInfo *series.SeriesInfo) (bool, error) {
+	if seriesInfo == nil {
+		return false, nil
+	}
+	if seriesInfo.IsAnime {
+		return true, nil
+	}
+	matcher, ok := resolver.(episode_identity.SeriesMatcher)
+	if !ok {
+		return false, nil
+	}
+	request := episode_identity.Request{
+		IDs: episode_identity.ExternalIDs{
+			IMDb: seriesInfo.ImdbId, TMDB: seriesInfo.TmdbId, TVDB: seriesInfo.TvdbId,
+		},
+		SeriesName: seriesInfo.Name,
+		Aliases:    seriesInfo.Aliases,
+	}
+	return matcher.MatchesSeries(ctx, request)
+}
+
+// applyContiguousInventoryAbsoluteFallback derives absolute anime numbering
+// only when every positive local season and every episode inside it is
+// contiguous from one. A gap makes the cumulative offset unsafe, so the whole
+// fallback abstains. Existing resolver evidence always wins.
+func applyContiguousInventoryAbsoluteFallback(seriesInfo *series.SeriesInfo) int {
+	if seriesInfo == nil || !seriesInfo.IsAnime {
+		return 0
+	}
+	inventory := seriesInfo.ArchiveEpList
+	if len(inventory) == 0 {
+		inventory = seriesInfo.EpList
+	}
+	bySeason := make(map[int]map[int]struct{})
+	maxSeason := 0
+	for _, episode := range inventory {
+		if episode.Season <= 0 || episode.Episode <= 0 {
+			continue
+		}
+		if bySeason[episode.Season] == nil {
+			bySeason[episode.Season] = make(map[int]struct{})
+		}
+		bySeason[episode.Season][episode.Episode] = struct{}{}
+		if episode.Season > maxSeason {
+			maxSeason = episode.Season
+		}
+	}
+	if len(bySeason) < 2 || maxSeason < 2 {
+		return 0
+	}
+
+	offsetBySeason := make(map[int]int, maxSeason)
+	cumulative := 0
+	for season := 1; season <= maxSeason; season++ {
+		episodes := bySeason[season]
+		if len(episodes) == 0 {
+			return 0
+		}
+		maxEpisode := 0
+		for episode := range episodes {
+			if episode > maxEpisode {
+				maxEpisode = episode
+			}
+		}
+		if maxEpisode != len(episodes) {
+			return 0
+		}
+		for episode := 1; episode <= maxEpisode; episode++ {
+			if _, exists := episodes[episode]; !exists {
+				return 0
+			}
+		}
+		offsetBySeason[season] = cumulative
+		cumulative += maxEpisode
+	}
+
+	apply := func(episode *series.EpisodeInfo) bool {
+		// A later local season is evidence that this season's boundary is
+		// complete. Do not guess offsets for the newest/only season.
+		if episode == nil || episode.AbsoluteEpisode > 0 || episode.Season <= 1 ||
+			episode.Season >= maxSeason || episode.Episode <= 0 {
+			return false
+		}
+		offset, exists := offsetBySeason[episode.Season]
+		if !exists {
+			return false
+		}
+		episode.AbsoluteEpisode = offset + episode.Episode
+		episode.NumberingSource = "local contiguous season inventory"
+		episode.NumberingConfidence = 0.8
+		return true
+	}
+	for index := range seriesInfo.ArchiveEpList {
+		apply(&seriesInfo.ArchiveEpList[index])
+	}
+	for index := range seriesInfo.EpList {
+		apply(&seriesInfo.EpList[index])
+	}
+	resolved := 0
+	for key, episode := range seriesInfo.NeedDlEpsKeyList {
+		if apply(&episode) {
+			resolved++
+			seriesInfo.NeedDlEpsKeyList[key] = episode
+		}
+	}
+	return resolved
 }
 
 func defaultAnimeEpisodeResolver() (episode_identity.Resolver, error) {
