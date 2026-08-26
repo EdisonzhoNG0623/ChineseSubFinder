@@ -542,16 +542,13 @@ func (s *Supplier) step0WithCacheability(browser *rod.Browser, keyword string, e
 	}
 	imgSelection := doc.Find("img.rounded-start")
 	if imgSelection.Size() > 0 {
-		alias := ""
-		if len(expectedAlias) > 0 {
-			alias = expectedAlias[0]
-		}
+		aliases := uniqueSubHDAliases(expectedAlias)
 		matchedImage := false
 		step1URL := ""
 		imgSelection.EachWithBreak(func(_ int, image *goquery.Selection) bool {
-			if alias != "" {
+			if len(aliases) > 0 {
 				title, exists := image.Attr("alt")
-				if !exists || !subHDSearchResultMatchesAlias(title, alias) {
+				if !exists || !subHDSearchResultMatchesAliases(title, aliases) {
 					return true
 				}
 			}
@@ -562,7 +559,7 @@ func (s *Supplier) step0WithCacheability(browser *rod.Browser, keyword string, e
 		if step1URL != "" {
 			return step1URL, true, nil
 		}
-		if alias != "" && !matchedImage {
+		if len(aliases) > 0 && !matchedImage {
 			return "", true, nil
 		}
 		return "", false, common.SubHDStep0HrefIsNull

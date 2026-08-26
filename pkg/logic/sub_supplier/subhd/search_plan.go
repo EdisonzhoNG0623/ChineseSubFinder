@@ -23,7 +23,7 @@ var (
 type subHDSearchQuery struct {
 	Keyword string
 	Kind    string
-	Alias   string
+	Aliases []string
 }
 
 func subHDSeriesAliases(mediaInfo *models.MediaInfo, seriesInfo *series.SeriesInfo) []string {
@@ -54,7 +54,11 @@ func buildSubHDSearchPlan(aliases []string, season int, episodes []series.Episod
 			return
 		}
 		seen[key] = struct{}{}
-		queries = append(queries, subHDSearchQuery{Keyword: keyword, Kind: kind, Alias: alias})
+		queries = append(queries, subHDSearchQuery{
+			Keyword: keyword,
+			Kind:    kind,
+			Aliases: subHDValidationAliases(aliases, alias),
+		})
 	}
 
 	aliases = uniqueSubHDAliases(aliases)
@@ -138,22 +142,64 @@ func uniqueSubHDAliases(aliases []string) []string {
 	return out
 }
 
-func subHDSearchResultMatchesAlias(resultTitle, alias string) bool {
-	normalize := func(value string) string {
-		value = subHDTitleYear.ReplaceAllString(strings.ToLower(value), "")
-		return strings.Map(func(r rune) rune {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				return r
-			}
-			return -1
-		}, value)
+func subHDValidationAliases(allAliases []string, queryAlias string) []string {
+	out := make([]string, 0, len(allAliases)+1)
+	out = append(out, queryAlias)
+	out = append(out, allAliases...)
+	return uniqueSubHDAliases(out)
+}
+
+func normalizedSubHDTitle(value string) string {
+	value = subHDTitleYear.ReplaceAllString(strings.ToLower(value), "")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, value)
+}
+
+func strongSubHDAlias(alias string) bool {
+	withoutYear := subHDTitleYear.ReplaceAllString(strings.ToLower(alias), "")
+	if len(strings.Fields(withoutYear)) >= 2 {
+		return true
 	}
-	resultTitle = normalize(resultTitle)
-	alias = normalize(alias)
-	if len([]rune(alias)) < 2 || resultTitle == "" {
+	for _, r := range withoutYear {
+		if unicode.IsLetter(r) && r > unicode.MaxASCII {
+			return true
+		}
+	}
+	return false
+}
+
+func subHDSearchResultMatchesAliases(resultTitle string, aliases []string) bool {
+	resultTitle = normalizedSubHDTitle(resultTitle)
+	if resultTitle == "" {
 		return false
 	}
-	return strings.Contains(resultTitle, alias)
+	hasStrongAlias := false
+	for _, alias := range aliases {
+		normalizedAlias := normalizedSubHDTitle(alias)
+		if len([]rune(normalizedAlias)) < 2 || !strongSubHDAlias(alias) {
+			continue
+		}
+		hasStrongAlias = true
+		if strings.Contains(resultTitle, normalizedAlias) {
+			return true
+		}
+	}
+	if hasStrongAlias {
+		return false
+	}
+	// Some series genuinely have only a one-word Latin title. Without a
+	// stronger alias, require an exact normalized title instead of accepting a
+	// keyword embedded in an unrelated title such as "Jurassic Reborn".
+	for _, alias := range aliases {
+		if normalizedAlias := normalizedSubHDTitle(alias); normalizedAlias != "" && resultTitle == normalizedAlias {
+			return true
+		}
+	}
+	return false
 }
 
 func episodesForSeason(seriesInfo *series.SeriesInfo, season int) []series.EpisodeInfo {

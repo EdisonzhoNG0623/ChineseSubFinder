@@ -98,18 +98,35 @@ func TestSubHDTargetSeasonsFallsBackToEpisodeMap(t *testing.T) {
 }
 
 func TestSubHDSearchResultAliasRejectsSubtitleKeywordCollision(t *testing.T) {
-	if subHDSearchResultMatchesAlias("闪电侠 第四季 The Flash", "REBORN!") {
+	aliases := []string{"REBORN!", "家庭教師ヒットマン REBORN!", "家庭教师HITMAN REBORN!"}
+	if subHDSearchResultMatchesAliases("闪电侠 第四季 The Flash Reborn", aliases) {
 		t.Fatal("subtitle episode-title keyword collision matched the wrong series")
 	}
-	if !subHDSearchResultMatchesAlias("家庭教师HITMAN REBORN!", "家庭教师HITMAN REBORN! (2006)") {
+	if subHDSearchResultMatchesAliases("侏罗纪：重生 Jurassic: Reborn (2025)", aliases) {
+		t.Fatal("one-word alias collision matched an unrelated title")
+	}
+	if !subHDSearchResultMatchesAliases("家庭教师HITMAN REBORN!", []string{"家庭教师HITMAN REBORN! (2006)"}) {
 		t.Fatal("year-suffixed local alias did not match the correct series")
+	}
+	if !subHDSearchResultMatchesAliases("Reborn (2018)", []string{"Reborn"}) {
+		t.Fatal("an exact one-word title must remain searchable")
 	}
 }
 
 func TestBuildSubHDSearchPlanKeepsExpectedAlias(t *testing.T) {
 	plan := buildSubHDSearchPlan([]string{"REBORN!"}, 4, nil, true)
-	if len(plan) == 0 || plan[0].Alias != "REBORN!" {
+	if len(plan) == 0 || len(plan[0].Aliases) == 0 || plan[0].Aliases[0] != "REBORN!" {
 		t.Fatalf("search plan alias = %#v", plan)
+	}
+	if got := plan[0].Aliases; len(got) != 1 {
+		t.Fatalf("search plan validation aliases = %#v", got)
+	}
+}
+
+func TestBuildSubHDSearchPlanUsesAllSeriesAliasesForValidation(t *testing.T) {
+	plan := buildSubHDSearchPlan([]string{"家庭教师", "REBORN!", "家庭教師ヒットマン REBORN!"}, 4, nil, true)
+	if len(plan) == 0 || len(plan[0].Aliases) != 3 {
+		t.Fatalf("validation aliases = %#v", plan)
 	}
 }
 
