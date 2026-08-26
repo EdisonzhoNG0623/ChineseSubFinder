@@ -62,6 +62,9 @@
           <q-td>
             <q-badge :color="healthMeta(row.health).color" outline>{{ healthMeta(row.health).label }}</q-badge>
             <div v-if="row.status_message" class="text-caption text-grey-7 q-mt-xs">{{ row.status_message }}</div>
+            <div v-if="row.not_attempted_reason" class="text-caption text-warning q-mt-xs">
+              {{ row.not_attempted_reason }}
+            </div>
           </q-td>
         </template>
         <template #body-cell-usage="{ row }">
@@ -80,6 +83,7 @@
         <template #body-cell-hit="{ row }">
           <q-td>
             <div>{{ row.candidate_hits }} 次命中 · {{ row.candidates }} 个候选</div>
+            <div v-if="row.attempt_state === 'NOT_ATTEMPTED'" class="text-caption text-grey-7">尚无实际搜索请求</div>
             <div class="text-caption text-positive">
               选中 {{ row.selections || 0 }} 次 · 保存 {{ row.saves || 0 }} 次 · 转化 {{ conversionText(row) }}
             </div>
@@ -98,8 +102,9 @@
           <q-td>
             <div>{{ row.average_attempt_millis > 0 ? `平均 ${formatDuration(row.average_attempt_millis)}` : '—' }}</div>
             <div class="text-caption text-grey-7">
-              P95 {{ formatDuration(row.p95_attempt_millis) }} · 检测 {{ formatDuration(row.latency_millis) }}
+              P95 {{ formatDuration(row.p95_attempt_millis) }} · 当前预算 {{ formatDuration(row.search_budget_millis) }}
             </div>
+            <div class="text-caption text-grey-7">连通性检测 {{ formatDuration(row.latency_millis) }}</div>
           </q-td>
         </template>
         <template #body-cell-capabilities="{ row }">

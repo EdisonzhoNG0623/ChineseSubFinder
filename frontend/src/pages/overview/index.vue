@@ -183,6 +183,18 @@ const queueMetrics = computed(() => [
     className: 'text-primary',
   },
   {
+    label: '集号回退就绪',
+    value: overview.queue?.numbering_ready || 0,
+    note: `等待剧集 ${overview.queue?.episode_waiting || 0} 项`,
+    className: 'text-primary',
+  },
+  {
+    label: '元数据阻塞',
+    value: overview.queue?.metadata_blocked || 0,
+    note: '未调用字幕源，需检查 NFO',
+    className: overview.queue?.metadata_blocked ? 'text-warning' : 'text-positive',
+  },
+  {
     label: '已保存字幕',
     value: (overview.suppliers || []).reduce((sum, item) => sum + (item.saves || 0), 0),
     note: '从候选到落盘的实际成果',

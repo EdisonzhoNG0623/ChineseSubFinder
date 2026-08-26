@@ -102,6 +102,8 @@ func isTransientError(message string) bool {
 func isPersistentLocalError(message string) bool {
 	persistentMarkers := []string{
 		"no metadata file",
+		"series metadata episode not found",
+		"series metadata root not found",
 		"movie.xml",
 		"permission denied",
 		"read-only file system",

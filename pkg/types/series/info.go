@@ -14,6 +14,7 @@ type SeriesInfo struct {
 	TmdbId           string
 	TvdbId           string
 	Name             string
+	Aliases          []string
 	Year             int
 	ReleaseDate      string
 	EpList           []EpisodeInfo

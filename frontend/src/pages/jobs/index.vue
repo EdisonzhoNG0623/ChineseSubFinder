@@ -230,6 +230,18 @@ const summaryMetrics = computed(() => [
     note: '建议检查源与识别结果',
     className: 'text-negative',
   },
+  {
+    label: '集号回退就绪',
+    value: summary.numbering_ready || 0,
+    note: `等待剧集 ${summary.episode_waiting || 0} 项`,
+    className: 'text-primary',
+  },
+  {
+    label: '元数据阻塞',
+    value: summary.metadata_blocked || 0,
+    note: '缺少剧集 NFO 或有效根目录',
+    className: summary.metadata_blocked ? 'text-warning' : 'text-positive',
+  },
 ]);
 
 const load = async () => {

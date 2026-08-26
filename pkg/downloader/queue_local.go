@@ -70,7 +70,7 @@ func (d *Downloader) queueDownloaderLocal() {
 		if oneJob.TaskPriority > task_queue.HighTaskPriorityLevel {
 			// 说明优先级不高，需要进行判断
 			videoType := 0
-			if oneJob.VideoType == common2.Series {
+			if oneJob.VideoType != common2.Movie {
 				videoType = 1
 			}
 			if d.ScanLogic.Get(videoType, oneJob.VideoFPath) == true {
@@ -91,43 +91,44 @@ func (d *Downloader) queueDownloaderLocal() {
 		}
 	}
 	// --------------------------------------------------
-	// 这个任务如果是 series 那么需要考虑是否原始存入的信息是缺失的，需要补全
-	{
-		if oneJob.VideoType == common2.Series && (oneJob.SeriesRootDirPath == "" || oneJob.Season <= 0 || oneJob.Episode <= 0) {
-			// 连续剧的时候需要额外提交信息
-			epsVideoNfoInfo, err := decode.GetVideoNfoInfo4OneSeriesEpisode(oneJob.VideoFPath)
-			if err != nil {
-				d.log.Errorln("decode.GetVideoNfoInfo4OneSeriesEpisode()", err)
-				d.log.Infoln("maybe you moved video file to another place or delete it, so will delete this job")
-				bok, err = d.downloadQueue.Del(oneJob.Id)
-				if err != nil {
-					d.log.Errorln("d.downloadQueue.Del()", err)
-					return
-				}
-				if bok == false {
-					d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%s) == false", oneJob.Id))
-					return
-				}
+	// Repair legacy series metadata before any supplier call. The nearest
+	// scraped root is authoritative even when an old queue item already has a
+	// non-empty (but overly broad) category directory persisted.
+	if oneJob.VideoType != common2.Movie {
+		oldRoot := oneJob.SeriesRootDirPath
+		oldSeason, oldEpisode := oneJob.Season, oneJob.Episode
+		if oneJob.Season <= 0 || oneJob.Episode <= 0 {
+			episodeInfo, metadataErr := decode.GetVideoNfoInfo4OneSeriesEpisode(oneJob.VideoFPath)
+			if metadataErr != nil || episodeInfo.Season <= 0 || episodeInfo.Episode <= 0 {
+				blockedErr := fmt.Errorf("series metadata episode not found")
+				d.log.WithFields(map[string]interface{}{
+					"event": "series_identity_blocked", "reason": "episode_metadata_missing", "job_id": oneJob.Id,
+				}).Warn(blockedErr)
+				d.downloadQueue.AutoDetectUpdateJobStatus(oneJob, blockedErr)
 				return
 			}
-			seriesInfoDirPath := decode.GetSeriesDirRootFPath(oneJob.VideoFPath)
-			if seriesInfoDirPath == "" {
-				d.log.Errorln(fmt.Sprintf("decode.GetSeriesDirRootFPath == Empty, %s", oneJob.VideoFPath))
-				d.log.Infoln("you need check the directory structure of a series, so will delete this job")
-				bok, err = d.downloadQueue.Del(oneJob.Id)
-				if err != nil {
-					d.log.Errorln("d.downloadQueue.Del()", err)
-					return
-				}
-				if bok == false {
-					d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%s) == false", oneJob.Id))
-					return
-				}
+			oneJob.Season = episodeInfo.Season
+			oneJob.Episode = episodeInfo.Episode
+		}
+		resolvedRoot := decode.GetSeriesDirRootFPath(oneJob.VideoFPath)
+		if resolvedRoot == "" {
+			blockedErr := fmt.Errorf("series metadata root not found")
+			d.log.WithFields(map[string]interface{}{
+				"event": "series_identity_blocked", "reason": "series_root_missing", "job_id": oneJob.Id,
+			}).Warn(blockedErr)
+			d.downloadQueue.AutoDetectUpdateJobStatus(oneJob, blockedErr)
+			return
+		}
+		oneJob.SeriesRootDirPath = resolvedRoot
+		if oldRoot != resolvedRoot || oldSeason != oneJob.Season || oldEpisode != oneJob.Episode {
+			bok, err = d.downloadQueue.Update(oneJob)
+			if err != nil || !bok {
+				d.log.WithError(err).Error("series root repair could not be persisted")
 				return
 			}
-			oneJob.Season = epsVideoNfoInfo.Season
-			oneJob.Episode = epsVideoNfoInfo.Episode
-			oneJob.SeriesRootDirPath = seriesInfoDirPath
+			d.log.WithFields(map[string]interface{}{
+				"event": "series_root_repaired", "job_id": oneJob.Id,
+			}).Info("series root repaired from nearest tvshow metadata")
 		}
 	}
 	// --------------------------------------------------
@@ -207,7 +208,7 @@ func (d *Downloader) queueDownloaderLocal() {
 					d.log.Infoln("MovieNeedDlSub == false, Ignore This Job")
 					return
 				}
-			} else if oneJob.VideoType == common2.Series {
+			} else {
 
 				bNeedDlSub, seriesInfo, err := nowSubSupplierHub.SeriesNeedDlSub(
 					d.fileDownloader.MediaInfoDealers,
@@ -250,7 +251,7 @@ func (d *Downloader) queueDownloaderLocal() {
 		}
 	}
 	seriesBatch := []taskQueue2.OneJob{oneJob}
-	if oneJob.VideoType == common2.Series {
+	if oneJob.VideoType != common2.Movie {
 		seriesBatch = d.readySeriesBatch(oneJob)
 		if len(seriesBatch) > 1 {
 			d.log.WithFields(map[string]interface{}{
@@ -303,7 +304,7 @@ func (d *Downloader) queueDownloaderLocal() {
 			// 电影
 			// 具体的下载逻辑 func()
 			done <- d.movieDlFunc(jobCtx, oneJob, downloadCounter)
-		} else if oneJob.VideoType == common2.Series {
+		} else if oneJob.VideoType == common2.Series || oneJob.VideoType == common2.Anime {
 			// 连续剧
 			// 具体的下载逻辑 func()
 			done <- d.seriesDlFuncBatch(jobCtx, oneJob, seriesBatch, downloadCounter)

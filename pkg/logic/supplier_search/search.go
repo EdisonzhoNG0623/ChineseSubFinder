@@ -277,20 +277,54 @@ func isSlow(name string) bool {
 }
 
 func timeoutFor(name, phase string) time.Duration {
+	record := subtitle_metrics.Snapshot()[strings.ToLower(name)]
+	return adaptiveTimeoutFor(name, phase, record)
+}
+
+// CurrentTimeout exposes the same bounded budget used by runtime searches for
+// diagnostics. It contains no request or media data.
+func CurrentTimeout(name string) time.Duration {
+	phase := "fast"
+	if isSlow(name) {
+		phase = "slow"
+	}
+	return timeoutFor(name, phase)
+}
+
+func adaptiveTimeoutFor(name, phase string, record subtitle_metrics.SupplierRuntime) time.Duration {
+	baseline, minimum, maximum := supplierTimeoutBounds(name, phase)
+	if record.Attempts < 10 {
+		return baseline
+	}
+	observed := time.Duration(record.P95AttemptMillis()) * time.Millisecond
+	if observed <= 0 {
+		return baseline
+	}
+	budget := observed + observed/4 + 2*time.Second
+	if budget < minimum {
+		return minimum
+	}
+	if budget > maximum {
+		return maximum
+	}
+	return budget
+}
+
+func supplierTimeoutBounds(name, phase string) (baseline, minimum, maximum time.Duration) {
 	if phase == "fast" {
 		switch strings.ToLower(name) {
 		case "xunlei", "shooter", "subdl":
-			return 10 * time.Second
+			return 10 * time.Second, 5 * time.Second, 15 * time.Second
 		default:
-			return 20 * time.Second
+			return 20 * time.Second, 10 * time.Second, 30 * time.Second
 		}
 	}
 	switch strings.ToLower(name) {
 	case "assrt":
-		return 180 * time.Second
+		return 45 * time.Second, 20 * time.Second, 75 * time.Second
 	case "subtitle_best", "subtitlebest":
-		return 30 * time.Second
+		return 30 * time.Second, 10 * time.Second, 45 * time.Second
 	default:
-		return 60 * time.Second
+		return 45 * time.Second, 15 * time.Second, 60 * time.Second
 	}
 }

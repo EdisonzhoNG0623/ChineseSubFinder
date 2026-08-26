@@ -125,14 +125,25 @@ func TestTimeoutForSupplierTier(t *testing.T) {
 		want        time.Duration
 	}{
 		{name: "xunlei", phase: "fast", want: 10 * time.Second},
-		{name: "assrt", phase: "slow", want: 180 * time.Second},
+		{name: "assrt", phase: "slow", want: 45 * time.Second},
 		{name: "subtitle_best", phase: "slow", want: 30 * time.Second},
-		{name: "subhd", phase: "slow", want: 60 * time.Second},
+		{name: "subhd", phase: "slow", want: 45 * time.Second},
 	}
 	for _, test := range tests {
 		if got := timeoutFor(test.name, test.phase); got != test.want {
 			t.Errorf("timeoutFor(%q, %q) = %s, want %s", test.name, test.phase, got, test.want)
 		}
+	}
+}
+
+func TestAdaptiveTimeoutUsesObservedP95WithinBounds(t *testing.T) {
+	record := subtitle_metrics.SupplierRuntime{Attempts: 20, AttemptBuckets: [6]int64{0, 20}}
+	if got := adaptiveTimeoutFor("assrt", "slow", record); got != 20*time.Second {
+		t.Fatalf("adaptive timeout = %s, want lower bound 20s", got)
+	}
+	record.AttemptBuckets = [6]int64{0, 0, 0, 20}
+	if got := adaptiveTimeoutFor("assrt", "slow", record); got != 75*time.Second {
+		t.Fatalf("adaptive timeout = %s, want upper bound 75s", got)
 	}
 }
 

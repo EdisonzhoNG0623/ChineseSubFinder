@@ -12,7 +12,7 @@ import (
 func TestFilterJobsAndSummary(t *testing.T) {
 	now := time.Now()
 	jobs := []taskQueueTypes.OneJob{
-		{VideoName: "Anime 01.mkv", VideoType: common.Anime, JobStatus: taskQueueTypes.Waiting, TaskPriority: 6, ErrorInfo: "No Sub Found", UpdateTime: emby.Time(now), ForceRun: true, SeriesRootDirPath: "/media/anime", Season: 1},
+		{VideoName: "Anime 01.mkv", VideoType: common.Anime, JobStatus: taskQueueTypes.Waiting, TaskPriority: 6, ErrorInfo: "No Sub Found", UpdateTime: emby.Time(now), ForceRun: true, SeriesRootDirPath: "/media/anime", Season: 1, AbsoluteEpisode: 13},
 		{VideoName: "Anime 02.mkv", VideoType: common.Anime, JobStatus: taskQueueTypes.Waiting, TaskPriority: 6, SeriesRootDirPath: "/media/anime", Season: 1},
 		{VideoName: "Movie.mkv", VideoType: common.Movie, JobStatus: taskQueueTypes.Done, TaskPriority: 5, UpdateTime: emby.Time(now)},
 	}
@@ -23,7 +23,8 @@ func TestFilterJobsAndSummary(t *testing.T) {
 	}
 	summary := summarizeJobs(jobs, now)
 	if summary.Total != 3 || summary.ByVideoType["anime"] != 2 || summary.ByStatus["done"] != 1 ||
-		summary.WaitingSeries != 2 || summary.SeriesGroups != 1 || summary.BatchableGroups != 1 {
+		summary.WaitingSeries != 2 || summary.SeriesGroups != 1 || summary.BatchableGroups != 1 ||
+		summary.EpisodeWaiting != 2 || summary.NumberingReady != 1 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 }
@@ -41,9 +42,10 @@ func TestNewJobViewIncludesAnimeFallbackPlan(t *testing.T) {
 		VideoType: common.Anime, SeriesName: "Example Anime", SeriesRootDirPath: "/media/Example Anime",
 		Season: 8, Episode: 11, AbsoluteEpisode: 288, SceneSeason: 8, SceneEpisode: 10,
 		NumberingSource: "anime-lists", NumberingConfidence: 1,
+		SearchFingerprint: "0123456789abcdef",
 	}
 	view := newJobView(job, time.Now())
-	if !view.Identity.IsAnime || view.Identity.AbsoluteEpisode != 288 || len(view.Identity.QueryPlan) < 3 {
+	if !view.Identity.IsAnime || view.Identity.AbsoluteEpisode != 288 || view.Identity.SearchFingerprint != job.SearchFingerprint || len(view.Identity.QueryPlan) < 3 {
 		t.Fatalf("unexpected identity view: %+v", view.Identity)
 	}
 	foundAbsolute := false

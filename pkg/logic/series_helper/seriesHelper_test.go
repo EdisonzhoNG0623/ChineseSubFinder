@@ -2,12 +2,21 @@ package series_helper
 
 import (
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/log_helper"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/unit_test_helper"
 )
+
+func TestUniqueSeriesAliasesNormalizesAndDeduplicates(t *testing.T) {
+	got := uniqueSeriesAliases(" Fairy   Tail ", "fairy tail", "フェアリーテイル", "")
+	want := []string{"Fairy Tail", "フェアリーテイル"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("aliases = %#v, want %#v", got, want)
+	}
+}
 
 func TestReadSeriesInfoFromDir(t *testing.T) {
 	t.Skip("requires a local Windows media-library fixture")

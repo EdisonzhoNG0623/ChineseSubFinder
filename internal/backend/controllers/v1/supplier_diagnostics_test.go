@@ -61,3 +61,17 @@ func TestSupplierAttemptWithoutHealthKeepsUnknownStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestSupplierDiagnosticsExplainWhyEnabledSourceWasNotAttempted(t *testing.T) {
+	s := settings.NewSettings(t.TempDir())
+	for _, diagnostic := range buildSupplierDiagnostics(s, nil, nil) {
+		if diagnostic.Name != common.SubSiteXunLei {
+			continue
+		}
+		if diagnostic.AttemptState != "NOT_ATTEMPTED" || diagnostic.NotAttemptedReason == "" {
+			t.Fatalf("missing not-attempted explanation: %+v", diagnostic)
+		}
+		return
+	}
+	t.Fatal("xunlei diagnostic not found")
+}

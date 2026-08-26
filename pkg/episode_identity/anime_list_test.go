@@ -68,3 +68,19 @@ func TestAnimeListResolverAbstainsWithoutMapping(t *testing.T) {
 		t.Fatalf("error = %v, want ErrNoMapping", err)
 	}
 }
+
+func TestAnimeListResolverFallsBackToNormalizedTitle(t *testing.T) {
+	resolver, err := ParseAnimeList(strings.NewReader(fairyTailAnimeListFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := resolver.Resolve(context.Background(), Request{
+		SeriesName: "Fairy Tail (2018)", Season: 8, Episode: 11,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.AbsoluteEpisode != 288 || identity.Confidence != 0.92 || identity.IDs.AniDB != "13295" {
+		t.Fatalf("unexpected title identity: %#v", identity)
+	}
+}

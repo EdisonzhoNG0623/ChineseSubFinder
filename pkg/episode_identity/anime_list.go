@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const (
@@ -50,6 +51,7 @@ type AnimeListResolver struct {
 	byTMDB   map[string][]int
 	byTVDB   map[string][]int
 	byIMDb   map[string][]int
+	byName   map[string][]int
 }
 
 func ParseAnimeList(reader io.Reader) (*AnimeListResolver, error) {
@@ -66,26 +68,44 @@ func ParseAnimeList(reader io.Reader) (*AnimeListResolver, error) {
 		byTMDB:   make(map[string][]int),
 		byTVDB:   make(map[string][]int),
 		byIMDb:   make(map[string][]int),
+		byName:   make(map[string][]int),
 	}
 	for index, entry := range document.Anime {
 		resolver.indexEntry(resolver.byTMDB, entry.TMDBTV, index)
 		resolver.indexEntry(resolver.byTVDB, entry.TVDBID, index)
 		resolver.indexEntry(resolver.byIMDb, strings.ToLower(strings.TrimSpace(entry.IMDbID)), index)
+		resolver.indexEntry(resolver.byName, normalizeAnimeTitle(entry.Name), index)
 	}
 	return resolver, nil
 }
 
-func (r *AnimeListResolver) Resolve(_ context.Context, request Request) (Identity, error) {
+func (r *AnimeListResolver) Resolve(ctx context.Context, request Request) (Identity, error) {
+	candidates, err := r.ResolveCandidates(ctx, request)
+	if err != nil {
+		return Identity{}, err
+	}
+	if len(candidates) == 0 {
+		return Identity{}, ErrNoMapping
+	}
+	if len(candidates) > 1 {
+		return Identity{}, fmt.Errorf("conflicting Anime-Lists mappings: %d candidates", len(candidates))
+	}
+	return candidates[0], nil
+}
+
+func (r *AnimeListResolver) ResolveCandidates(_ context.Context, request Request) ([]Identity, error) {
 	if request.Season <= 0 || request.Episode <= 0 {
-		return Identity{}, errors.New("season and episode must be positive")
+		return nil, errors.New("season and episode must be positive")
 	}
 	if strings.TrimSpace(request.IDs.TMDB) == "" && strings.TrimSpace(request.IDs.TVDB) == "" &&
-		strings.TrimSpace(request.IDs.IMDb) == "" {
-		return Identity{}, errors.New("at least one stable series ID is required")
+		strings.TrimSpace(request.IDs.IMDb) == "" && len(request.Aliases) == 0 && strings.TrimSpace(request.SeriesName) == "" {
+		return nil, errors.New("at least one stable series ID or title alias is required")
 	}
 
-	var resolved *Identity
-	for _, entryIndex := range r.candidateIndexes(request.IDs) {
+	resolved := make([]Identity, 0, 2)
+	seenAbsolute := make(map[int]struct{}, 2)
+	matchedByTitle := !hasStableSeriesID(request.IDs)
+	for _, entryIndex := range r.candidateIndexes(request) {
 		entry := r.document.Anime[entryIndex]
 		absolute, ok := entry.resolveAbsolute(request.Season, request.Episode)
 		if !ok {
@@ -93,7 +113,7 @@ func (r *AnimeListResolver) Resolve(_ context.Context, request Request) (Identit
 		}
 		candidate := Identity{
 			IDs: ExternalIDs{
-				IMDb: request.IDs.IMDb, TMDB: firstNonEmpty(request.IDs.TMDB, entry.TMDBTV),
+				IMDb: firstNonEmpty(request.IDs.IMDb, entry.IMDbID), TMDB: firstNonEmpty(request.IDs.TMDB, entry.TMDBTV),
 				TVDB: firstNonEmpty(request.IDs.TVDB, entry.TVDBID), AniDB: entry.AniDBID,
 			},
 			Season: request.Season, Episode: request.Episode, AbsoluteEpisode: absolute,
@@ -102,15 +122,17 @@ func (r *AnimeListResolver) Resolve(_ context.Context, request Request) (Identit
 				Source: "Anime-Lists", Rule: fmt.Sprintf("AniDB %s (%s) offset mapping", entry.AniDBID, entry.Name), Confidence: 1,
 			}},
 		}
-		if resolved != nil && resolved.AbsoluteEpisode != candidate.AbsoluteEpisode {
-			return Identity{}, fmt.Errorf("conflicting Anime-Lists mappings: %d and %d", resolved.AbsoluteEpisode, candidate.AbsoluteEpisode)
+		if matchedByTitle {
+			candidate.Confidence = 0.92
+			candidate.Evidence[0] = Evidence{Source: "Anime-Lists title", Rule: "normalized title and season mapping", Confidence: 0.92}
 		}
-		resolved = &candidate
+		if _, duplicate := seenAbsolute[candidate.AbsoluteEpisode]; duplicate {
+			continue
+		}
+		seenAbsolute[candidate.AbsoluteEpisode] = struct{}{}
+		resolved = append(resolved, candidate)
 	}
-	if resolved == nil {
-		return Identity{}, ErrNoMapping
-	}
-	return *resolved, nil
+	return resolved, nil
 }
 
 func (r *AnimeListResolver) indexEntry(index map[string][]int, id string, entryIndex int) {
@@ -121,7 +143,7 @@ func (r *AnimeListResolver) indexEntry(index map[string][]int, id string, entryI
 	index[id] = append(index[id], entryIndex)
 }
 
-func (r *AnimeListResolver) candidateIndexes(ids ExternalIDs) []int {
+func (r *AnimeListResolver) candidateIndexes(request Request) []int {
 	out := make([]int, 0, 4)
 	seen := make(map[int]struct{}, 4)
 	appendIndexes := func(indexes []int) {
@@ -133,10 +155,37 @@ func (r *AnimeListResolver) candidateIndexes(ids ExternalIDs) []int {
 			out = append(out, entryIndex)
 		}
 	}
-	appendIndexes(r.byTMDB[normalizeExternalID(ids.TMDB)])
-	appendIndexes(r.byTVDB[normalizeExternalID(ids.TVDB)])
-	appendIndexes(r.byIMDb[strings.ToLower(strings.TrimSpace(ids.IMDb))])
+	appendIndexes(r.byTMDB[normalizeExternalID(request.IDs.TMDB)])
+	appendIndexes(r.byTVDB[normalizeExternalID(request.IDs.TVDB)])
+	appendIndexes(r.byIMDb[strings.ToLower(strings.TrimSpace(request.IDs.IMDb))])
+	if len(out) == 0 && !hasStableSeriesID(request.IDs) {
+		for _, alias := range append([]string{request.SeriesName}, request.Aliases...) {
+			appendIndexes(r.byName[normalizeAnimeTitle(alias)])
+		}
+	}
 	return out
+}
+
+func hasStableSeriesID(ids ExternalIDs) bool {
+	return strings.TrimSpace(ids.TMDB) != "" || strings.TrimSpace(ids.TVDB) != "" || strings.TrimSpace(ids.IMDb) != ""
+}
+
+func normalizeAnimeTitle(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if len(value) >= 6 && value[len(value)-1] == ')' {
+		open := strings.LastIndex(value, "(")
+		if open >= 0 {
+			year := value[open+1 : len(value)-1]
+			if len(year) == 4 {
+				if _, err := strconv.Atoi(year); err == nil {
+					value = strings.TrimSpace(value[:open])
+				}
+			}
+		}
+	}
+	return strings.Join(strings.FieldsFunc(value, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}), " ")
 }
 
 func normalizeExternalID(value string) string {
@@ -217,6 +266,14 @@ func (r *CachedAnimeListResolver) Resolve(ctx context.Context, request Request) 
 		return Identity{}, err
 	}
 	return resolver.Resolve(ctx, request)
+}
+
+func (r *CachedAnimeListResolver) ResolveCandidates(ctx context.Context, request Request) ([]Identity, error) {
+	resolver, err := r.load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return resolver.ResolveCandidates(ctx, request)
 }
 
 func (r *CachedAnimeListResolver) load(ctx context.Context) (*AnimeListResolver, error) {

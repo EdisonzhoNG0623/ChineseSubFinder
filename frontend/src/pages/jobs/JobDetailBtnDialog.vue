@@ -74,6 +74,12 @@
                 ><q-item-label>{{ data.numbering_source || '仅本地标准集号' }}</q-item-label></q-item-section
               ><q-item-section side>{{ confidence }}</q-item-section></q-item
             >
+            <q-item v-if="data.identity?.search_fingerprint"
+              ><q-item-section
+                ><q-item-label caption>搜索证据指纹</q-item-label
+                ><q-item-label class="text-mono">{{ data.identity.search_fingerprint }}</q-item-label></q-item-section
+              ></q-item
+            >
             <q-item v-for="query in data.identity?.query_plan || []" :key="`${query.kind}-${query.query}`"
               ><q-item-section avatar
                 ><q-badge

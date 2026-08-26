@@ -30,6 +30,7 @@ type OneJob struct {
 	NumberingSource          string           `json:"numbering_source,omitempty"`     // 集号识别来源
 	NumberingConfidence      float64          `json:"numbering_confidence,omitempty"` // 集号识别置信度
 	SeriesName               string           `json:"series_name,omitempty"`          // 剧集名称，用于搜索计划诊断
+	SearchFingerprint        string           `json:"search_fingerprint,omitempty"`   // 不含路径的搜索证据指纹
 	JobStatus                JobStatus        `json:"job_status"`                     // 任务的状态
 	TaskPriority             int              `json:"task_priority" default:"5"`      // 任务的优先级，0 - 10 个级别，0 是最高，10 是最低
 	RetryTimes               int              `json:"retry_times"`                    // 重试了多少次
@@ -88,7 +89,7 @@ func NewOneJob(videoType common.VideoType, videoFPath string, taskPriority int, 
 			createTime, _ := dateparse.ParseAny(imdbInfo4Movie.ReleaseDate)
 			ob.CreatedTime = emby.Time(createTime)
 		}
-	} else if ob.VideoType == common.Series {
+	} else if ob.VideoType == common.Series || ob.VideoType == common.Anime {
 		imdbInfo4Eps, err := decode.GetVideoNfoInfo4OneSeriesEpisode(videoFPath)
 		if err == nil {
 			createTime, _ := dateparse.ParseAny(imdbInfo4Eps.ReleaseDate)

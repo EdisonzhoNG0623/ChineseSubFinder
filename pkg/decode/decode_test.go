@@ -1,6 +1,7 @@
 package decode
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -9,6 +10,43 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/unit_test_helper"
 )
+
+func TestGetSeriesDirRootFPathFindsNearestScrapedRoot(t *testing.T) {
+	root := t.TempDir()
+	category := filepath.Join(root, "Anime", "日番")
+	seriesRoot := filepath.Join(category, "Example Show (2026)")
+	episodeDir := filepath.Join(seriesRoot, "Specials", "Season 01")
+	if err := os.MkdirAll(episodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seriesRoot, "TVSHOW.NFO"), []byte("<tvshow/>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(episodeDir, "Example Show - S01E01.mkv")
+	if err := os.WriteFile(videoPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := GetSeriesDirRootFPath(videoPath); got != seriesRoot {
+		t.Fatalf("series root = %q, want %q", got, seriesRoot)
+	}
+}
+
+func TestGetSeriesDirRootFPathRejectsCategoryDirectory(t *testing.T) {
+	root := t.TempDir()
+	episodeDir := filepath.Join(root, "Anime", "日番", "Unknown Show", "Season 01")
+	if err := os.MkdirAll(episodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	videoPath := filepath.Join(episodeDir, "Unknown Show - S01E01.mkv")
+	if err := os.WriteFile(videoPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := GetSeriesDirRootFPath(videoPath); got != "" {
+		t.Fatalf("series root = %q, want empty", got)
+	}
+}
 
 func TestGetImdbAndYearMovieXml(t *testing.T) {
 

@@ -162,6 +162,11 @@ func (t *TaskQueue) update(oneJob task_queue2.OneJob) (bool, error) {
 	// 这里需要判断是否有优先级的 Update，如果有就需要把之前缓存的表给更新
 	// 然后再插入到新的表中
 	taskPriorityIndex, _ := t.taskKeyMap.Get(oneJob.Id)
+	storedValue, stored := t.taskPriorityMapList[taskPriorityIndex.(int)].Get(oneJob.Id)
+	oldSeriesRoot := ""
+	if stored {
+		oldSeriesRoot = storedValue.(task_queue2.OneJob).SeriesRootDirPath
+	}
 	// 检查权限范围
 	oneJob = t.checkPriority(oneJob)
 	if oneJob.TaskPriority != taskPriorityIndex {
@@ -177,12 +182,39 @@ func (t *TaskQueue) update(oneJob task_queue2.OneJob) (bool, error) {
 	t.taskKeyMap.Put(oneJob.Id, oneJob.TaskPriority)
 	// 分配到具体的优先级 map 中
 	t.taskPriorityMapList[oneJob.TaskPriority].Put(oneJob.Id, oneJob)
+	if oldSeriesRoot != oneJob.SeriesRootDirPath {
+		t.removeJobFromSeriesIndex(oldSeriesRoot, oneJob.Id)
+		t.addJobToSeriesIndex(oneJob.SeriesRootDirPath, oneJob.Id)
+	}
 	err := t.save(oneJob.TaskPriority)
 	if err != nil {
 		return false, err
 	}
 
 	return true, nil
+}
+
+func (t *TaskQueue) addJobToSeriesIndex(seriesRoot, jobID string) {
+	jobIDSet, found := t.taskGroupBySeries.Get(seriesRoot)
+	if !found {
+		jobIDSet = treeset.NewWithStringComparator()
+	}
+	jobIDSet.(*treeset.Set).Add(jobID)
+	t.taskGroupBySeries.Put(seriesRoot, jobIDSet)
+}
+
+func (t *TaskQueue) removeJobFromSeriesIndex(seriesRoot, jobID string) {
+	jobIDSet, found := t.taskGroupBySeries.Get(seriesRoot)
+	if !found {
+		return
+	}
+	set := jobIDSet.(*treeset.Set)
+	set.Remove(jobID)
+	if set.Empty() {
+		t.taskGroupBySeries.Remove(seriesRoot)
+		return
+	}
+	t.taskGroupBySeries.Put(seriesRoot, set)
 }
 
 // Update 更新素，不存在则会失败

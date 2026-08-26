@@ -40,6 +40,7 @@ type JobIdentityView struct {
 	SceneEpisode        int               `json:"scene_episode,omitempty"`
 	NumberingSource     string            `json:"numbering_source,omitempty"`
 	NumberingConfidence float64           `json:"numbering_confidence,omitempty"`
+	SearchFingerprint   string            `json:"search_fingerprint,omitempty"`
 	QueryPlan           []JobQueryVariant `json:"query_plan,omitempty"`
 }
 
@@ -60,6 +61,9 @@ type QueueSummary struct {
 	WaitingSeries   int            `json:"waiting_series"`
 	SeriesGroups    int            `json:"series_groups"`
 	BatchableGroups int            `json:"batchable_groups"`
+	EpisodeWaiting  int            `json:"episode_waiting"`
+	NumberingReady  int            `json:"numbering_ready"`
+	MetadataBlocked int            `json:"metadata_blocked"`
 }
 
 type ReplyJobPage struct {

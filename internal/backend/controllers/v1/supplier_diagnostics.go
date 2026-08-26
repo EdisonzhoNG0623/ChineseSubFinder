@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/supplier_search"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 	backendTypes "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/backend"
@@ -59,7 +60,8 @@ func buildSupplierDiagnostics(s *settings.Settings, runtime map[string]subtitle_
 	for _, definition := range supplierDefinitions {
 		one := supplierSettingsByName(s, definition.name)
 		diagnostic := backendTypes.SupplierDiagnostic{Name: definition.name, DisplayName: definition.display,
-			DefaultRootURL: definition.defaultURL, Capabilities: append([]string(nil), definition.capabilities...), Health: "UNKNOWN"}
+			DefaultRootURL: definition.defaultURL, Capabilities: append([]string(nil), definition.capabilities...), Health: "UNKNOWN",
+			SearchBudgetMs: supplier_search.CurrentTimeout(definition.name).Milliseconds()}
 		if one != nil {
 			diagnostic.RootURL, diagnostic.DailyLimit = one.RootUrl, one.DailyDownloadLimit
 			diagnostic.Enabled = one.DailyDownloadLimit != 0
@@ -89,6 +91,18 @@ func buildSupplierDiagnostics(s *settings.Settings, runtime map[string]subtitle_
 				diagnostic.Health = "DEGRADED"
 				diagnostic.StatusMessage = "连续失败，已临时跳过以释放队列"
 			}
+		}
+		switch {
+		case !diagnostic.Enabled:
+			diagnostic.AttemptState = "NOT_APPLICABLE"
+		case diagnostic.Attempts == 0:
+			diagnostic.AttemptState = "NOT_ATTEMPTED"
+			diagnostic.NotAttemptedReason = "尚无适用任务，或服务重启后尚未轮到该字幕源"
+		case !diagnostic.CircuitOpenUntil.IsZero() && time.Now().Before(diagnostic.CircuitOpenUntil):
+			diagnostic.AttemptState = "SKIPPED_TEMPORARILY"
+			diagnostic.NotAttemptedReason = "连续错误触发临时熔断，冷却后自动恢复"
+		default:
+			diagnostic.AttemptState = "ATTEMPTED"
 		}
 		out = append(out, diagnostic)
 	}

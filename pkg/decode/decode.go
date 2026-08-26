@@ -79,6 +79,10 @@ func getVideoNfoInfo(nfoFilePath string, rootKey string) (types.VideoNfoInfo, er
 		imdbInfo.Title = t.Text()
 		break
 	}
+	for _, t := range doc.FindElements("./" + rootKey + "/originaltitle") {
+		imdbInfo.OriginalTitle = t.Text()
+		break
+	}
 	//---------------------------------------------------------------------
 	// IMDB
 	for _, t := range doc.FindElements("./" + rootKey + "/imdbid") {
@@ -396,14 +400,37 @@ func GetVideoNfoInfo4OneSeriesEpisode(oneEpFPath string) (types.VideoNfoInfo, er
 
 // GetSeriesDirRootFPath 从一集的绝对路径推断这个连续剧的根目录绝对路径
 func GetSeriesDirRootFPath(oneEpFPath string) string {
-
-	oneSeasonDirFPath := filepath.Dir(oneEpFPath)
-	oneSeriesDirFPath := filepath.Dir(oneSeasonDirFPath)
-	if IsFile(filepath.Join(oneSeriesDirFPath, MetadateTVNfo)) == true {
-		return oneSeriesDirFPath
-	} else {
-		return ""
+	// A scraped library is not guaranteed to use exactly
+	// series/season/episode.mkv. Flat series directories and additional
+	// grouping directories are both common. Walk upwards and select the
+	// nearest directory containing an actual tvshow.nfo; never fall back to an
+	// arbitrary parent such as /media/Anime/日番 because that merges unrelated
+	// shows into one supplier request.
+	current := filepath.Clean(filepath.Dir(oneEpFPath))
+	for depth := 0; depth < maxSeriesRootSearchDepth; depth++ {
+		if dirHasTVShowNFO(current) {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
 	}
+	return ""
+}
+
+func dirHasTVShowNFO(dirPath string) bool {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.EqualFold(entry.Name(), MetadateTVNfo) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetVideoInfoFromFileName 从文件名推断文件信息，这个应该是次要方案，优先还是从 nfo 文件获取这些信息
@@ -424,7 +451,7 @@ func GetVideoInfoFromFileName(fileName string) (*PTN.TorrentInfo, error) {
 	return parse, nil
 }
 
-//GetVideoInfoFromFileFullPath 从全文件路径推断文件信息，这个应该是次要方案，优先还是从 nfo 文件获取这些信息
+// GetVideoInfoFromFileFullPath 从全文件路径推断文件信息，这个应该是次要方案，优先还是从 nfo 文件获取这些信息
 func GetVideoInfoFromFileFullPath(videoFileFullPath string, isMovie bool) (types.VideoNfoInfo, time.Time, error) {
 
 	var err error
@@ -582,10 +609,11 @@ func IsFakeBDMVWorked(fakseVideFPath string) (bool, string, string) {
 }
 
 const (
-	MetadataMovieXml = "movie.xml"
-	suffixNameXml    = ".xml"
-	suffixNameNfo    = ".nfo"
-	MetadateTVNfo    = "tvshow.nfo"
+	MetadataMovieXml         = "movie.xml"
+	suffixNameXml            = ".xml"
+	suffixNameNfo            = ".nfo"
+	MetadateTVNfo            = "tvshow.nfo"
+	maxSeriesRootSearchDepth = 6
 	// 去除特殊字符，仅仅之有中文
 	regFixTitle = "[^\u4e00-\u9fa5a-zA-Z0-9\\s]"
 	// 去除特殊字符，把特殊字符都写进去

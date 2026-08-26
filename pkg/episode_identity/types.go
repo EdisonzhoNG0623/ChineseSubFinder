@@ -46,6 +46,14 @@ type Resolver interface {
 	Resolve(ctx context.Context, request Request) (Identity, error)
 }
 
+// CandidateResolver exposes bounded deterministic alternatives when a data
+// source contains conflicting mappings. Callers may resolve the ambiguity with
+// another guarded mechanism, but must never accept an identity outside this
+// candidate set.
+type CandidateResolver interface {
+	ResolveCandidates(ctx context.Context, request Request) ([]Identity, error)
+}
+
 // ResolverFunc makes deterministic and test resolvers easy to inject without
 // coupling suppliers to a concrete metadata service.
 type ResolverFunc func(context.Context, Request) (Identity, error)

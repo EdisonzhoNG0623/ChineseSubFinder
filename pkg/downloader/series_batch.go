@@ -1,8 +1,11 @@
 package downloader
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
@@ -12,14 +15,19 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const seriesBatchSize = 4
+const (
+	newSeriesBatchSize     = 4
+	retrySeriesBatchSize   = 8
+	historySeriesBatchSize = 12
+)
 
 func (d *Downloader) readySeriesBatch(primary taskQueueTypes.OneJob) []taskQueueTypes.OneJob {
 	jobs := []taskQueueTypes.OneJob{primary}
 	if primary.JobStatus != taskQueueTypes.Waiting || primary.SeriesRootDirPath == "" || primary.Season <= 0 {
 		return jobs
 	}
-	companions := d.downloadQueue.GetReadySeriesJobs(primary.SeriesRootDirPath, primary.Season, primary.Id, seriesBatchSize-1, time.Now())
+	limit := seriesBatchLimit(primary)
+	companions := d.downloadQueue.GetReadySeriesJobs(primary.SeriesRootDirPath, primary.Season, primary.Id, limit-1, time.Now())
 	seenEpisodes := map[string]struct{}{pkg.GetEpisodeKeyName(primary.Season, primary.Episode): {}}
 	for _, companion := range companions {
 		key := pkg.GetEpisodeKeyName(companion.Season, companion.Episode)
@@ -34,6 +42,17 @@ func (d *Downloader) readySeriesBatch(primary taskQueueTypes.OneJob) []taskQueue
 		jobs = append(jobs, companion)
 	}
 	return jobs
+}
+
+func seriesBatchLimit(primary taskQueueTypes.OneJob) int {
+	switch {
+	case primary.DownloadTimes >= 3:
+		return historySeriesBatchSize
+	case primary.DownloadTimes > 0:
+		return retrySeriesBatchSize
+	default:
+		return newSeriesBatchSize
+	}
 }
 
 func buildSeriesEpisodeMap(jobs []taskQueueTypes.OneJob) map[int][]int {
@@ -69,8 +88,21 @@ func enrichSeriesBatchJobs(jobs []taskQueueTypes.OneJob, identities map[string]s
 		out[index].NumberingSource = identity.numberingSource
 		out[index].NumberingConfidence = identity.numberingConfidence
 		out[index].SeriesName = identity.seriesName
+		out[index].SearchFingerprint = seriesSearchFingerprint(out[index], identity)
 	}
 	return out
+}
+
+func seriesSearchFingerprint(job taskQueueTypes.OneJob, identity seriesIdentity) string {
+	// Versioned and deliberately path-free: this can be exposed in diagnostics
+	// without leaking a library layout, while still showing whether the search
+	// evidence changed between attempts.
+	raw := fmt.Sprintf("v1\x00%s\x00%d\x00%d\x00%d\x00%d\x00%d\x00%s",
+		strings.ToLower(strings.TrimSpace(identity.seriesName)), job.Season, job.Episode,
+		identity.absoluteEpisode, identity.sceneSeason, identity.sceneEpisode,
+		strings.ToLower(strings.TrimSpace(identity.numberingSource)))
+	sum := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("%x", sum[:12])
 }
 
 type seriesIdentity struct {

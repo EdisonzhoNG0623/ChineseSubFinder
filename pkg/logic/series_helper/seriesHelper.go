@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ai_ambiguity"
@@ -355,10 +356,16 @@ func GetSeriesInfoFromDir(dealers *media_info_dealers.Dealers, seriesDir string)
 	}
 	seriesInfo.TmdbId = videoInfo.TmdbId
 	seriesInfo.TvdbId = videoInfo.TVdbId
+	seriesInfo.Aliases = uniqueSeriesAliases(videoInfo.Title, videoInfo.OriginalTitle, filepath.Base(seriesDir))
 
 	imdbInfo, err := imdb_helper.GetIMDBInfoFromVideoNfoInfo(dealers, videoInfo)
 	if err != nil {
-		return nil, err
+		// Stable IDs improve matching but must not be a hard dependency. A
+		// scraped title, original title, TVDB ID and directory alias are enough
+		// for deterministic supplier and Anime-Lists fallbacks.
+		dealers.Logger.WithError(err).WithField("event", "series_metadata_id_degraded").Warn(
+			"IMDb/TMDB enrichment unavailable; continuing with local series metadata")
+		imdbInfo = nil
 	}
 
 	// 使用 IMDB ID 得到通用的剧集名称
@@ -393,12 +400,34 @@ func GetSeriesInfoFromDir(dealers *media_info_dealers.Dealers, seriesDir string)
 			seriesInfo.Year = iYear
 		}
 	}
+	seriesInfo.Aliases = uniqueSeriesAliases(append(seriesInfo.Aliases, seriesInfo.Name)...)
+	if imdbInfo != nil {
+		seriesInfo.Aliases = uniqueSeriesAliases(append(seriesInfo.Aliases, imdbInfo.AKA...)...)
+	}
 
 	seriesInfo.ReleaseDate = videoInfo.ReleaseDate
 	seriesInfo.DirPath = seriesDir
 	seriesInfo.EpList = make([]series.EpisodeInfo, 0)
 	seriesInfo.SeasonDict = make(map[int]int)
 	return &seriesInfo, nil
+}
+
+func uniqueSeriesAliases(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.Join(strings.Fields(value), " ")
+		key := strings.ToLower(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func getEpsInfoAndSubDic(logger *logrus.Logger,

@@ -164,11 +164,19 @@ func summarizeJobs(jobs []taskQueueTypes.OneJob, now time.Time) backendTypes.Que
 		}
 		if job.JobStatus == taskQueueTypes.Waiting && job.SeriesRootDirPath != "" && job.Season > 0 {
 			summary.WaitingSeries++
+			summary.EpisodeWaiting++
+			if job.AbsoluteEpisode > 0 || (job.SceneSeason > 0 && job.SceneEpisode > 0) {
+				summary.NumberingReady++
+			}
 			group := job.SeriesRootDirPath + "\x00" + strconv.Itoa(job.Season)
 			seriesGroups[group]++
 			if ready {
 				readySeriesGroups[group]++
 			}
+		}
+		message := strings.ToLower(job.ErrorInfo)
+		if strings.Contains(message, "series metadata episode not found") || strings.Contains(message, "series metadata root not found") {
+			summary.MetadataBlocked++
 		}
 	}
 	summary.SeriesGroups = len(seriesGroups)
@@ -293,5 +301,6 @@ func newJobView(job taskQueueTypes.OneJob, now time.Time) backendTypes.JobView {
 		SeriesName: job.SeriesName, Aliases: aliases, Season: job.Season, Episode: job.Episode,
 		AbsoluteEpisode: job.AbsoluteEpisode, SceneSeason: job.SceneSeason, SceneEpisode: job.SceneEpisode,
 		NumberingSource: job.NumberingSource, NumberingConfidence: job.NumberingConfidence, QueryPlan: queryViews,
+		SearchFingerprint: job.SearchFingerprint,
 	}}
 }
