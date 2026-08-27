@@ -138,13 +138,25 @@ func TestTimeoutForSupplierTier(t *testing.T) {
 
 func TestAdaptiveTimeoutUsesObservedP95WithinBounds(t *testing.T) {
 	record := subtitle_metrics.SupplierRuntime{Attempts: 20, AttemptBuckets: [6]int64{0, 20}}
-	if got := adaptiveTimeoutFor("assrt", "slow", record); got != 20*time.Second {
-		t.Fatalf("adaptive timeout = %s, want lower bound 20s", got)
+	if got := adaptiveTimeoutFor("assrt", "slow", record); got != 30*time.Second {
+		t.Fatalf("adaptive timeout = %s, want lower bound 30s", got)
 	}
 	record.AttemptBuckets = [6]int64{0, 0, 0, 20}
 	if got := adaptiveTimeoutFor("assrt", "slow", record); got != 75*time.Second {
 		t.Fatalf("adaptive timeout = %s, want upper bound 75s", got)
 	}
+}
+
+func TestAssrtProviderLimiterIsSerial(t *testing.T) {
+	providerLimiters.Delete("assrt")
+	limiter := providerLimiter("assrt")
+	limiter <- struct{}{}
+	select {
+	case limiter <- struct{}{}:
+		t.Fatal("ASSRT limiter accepted a concurrent request")
+	default:
+	}
+	<-limiter
 }
 
 func TestRunReturnsAfterStrongSlowResultWithoutWaitingForEverySupplier(t *testing.T) {

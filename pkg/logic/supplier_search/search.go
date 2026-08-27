@@ -249,9 +249,9 @@ func slowSupplierRank(name string) int {
 func providerLimiter(name string) chan struct{} {
 	limit := 4
 	switch strings.ToLower(name) {
-	case "subhd", "zimuku":
+	case "subhd", "zimuku", "assrt":
 		limit = 1
-	case "assrt", "subtitle_best", "subtitlebest", "open_subtitles", "subsource":
+	case "subtitle_best", "subtitlebest", "open_subtitles", "subsource":
 		limit = 2
 	}
 	value, _ := providerLimiters.LoadOrStore(strings.ToLower(name), make(chan struct{}, limit))
@@ -325,7 +325,7 @@ func supplierTimeoutBounds(name, phase string) (baseline, minimum, maximum time.
 	}
 	switch strings.ToLower(name) {
 	case "assrt":
-		return 45 * time.Second, 20 * time.Second, 75 * time.Second
+		return 45 * time.Second, 30 * time.Second, 75 * time.Second
 	case "subtitle_best", "subtitlebest":
 		return 30 * time.Second, 10 * time.Second, 45 * time.Second
 	case "open_subtitles", "subsource":

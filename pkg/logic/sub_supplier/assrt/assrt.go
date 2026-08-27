@@ -1,6 +1,7 @@
 package assrt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +46,7 @@ type Supplier struct {
 	isAlive           bool
 	theSearchInterval time.Duration
 	requestLock       sync.Mutex
+	lastRequestAt     time.Time
 }
 
 func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
@@ -54,7 +56,9 @@ func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
 	sup.fileDownloader = fileDownloader
 	sup.isAlive = true // 默认是可以使用的，如果 check 后，再调整状态
 
-	sup.theSearchInterval = 20 * time.Second
+	// ASSRT documents a five-requests-per-minute quota. Pace request starts at
+	// that boundary instead of sleeping after every response.
+	sup.theSearchInterval = 12 * time.Second
 
 	return &sup
 }
@@ -105,6 +109,10 @@ func (s *Supplier) GetSupplierName() string {
 }
 
 func (s *Supplier) GetSubListFromFile4Movie(filePath string) ([]supplier.SubInfo, error) {
+	return s.GetSubListFromFile4MovieContext(context.Background(), filePath)
+}
+
+func (s *Supplier) GetSubListFromFile4MovieContext(ctx context.Context, filePath string) ([]supplier.SubInfo, error) {
 	s.requestLock.Lock()
 	defer s.requestLock.Unlock()
 
@@ -117,10 +125,14 @@ func (s *Supplier) GetSubListFromFile4Movie(filePath string) ([]supplier.SubInfo
 		return nil, errors.New("Token is empty")
 	}
 
-	return s.getSubListFromFile(filePath, true)
+	return s.getSubListFromFileContext(ctx, filePath, true)
 }
 
 func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	return s.GetSubListFromFile4SeriesContext(context.Background(), seriesInfo)
+}
+
+func (s *Supplier) GetSubListFromFile4SeriesContext(ctx context.Context, seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
 	s.requestLock.Lock()
 	defer s.requestLock.Unlock()
 
@@ -133,10 +145,14 @@ func (s *Supplier) GetSubListFromFile4Series(seriesInfo *series.SeriesInfo) ([]s
 		return nil, errors.New("Token is empty")
 	}
 
-	return s.downloadSub4Series(seriesInfo)
+	return s.downloadSub4SeriesContext(ctx, seriesInfo)
 }
 
 func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	return s.GetSubListFromFile4AnimeContext(context.Background(), seriesInfo)
+}
+
+func (s *Supplier) GetSubListFromFile4AnimeContext(ctx context.Context, seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
 	s.requestLock.Lock()
 	defer s.requestLock.Unlock()
 
@@ -149,10 +165,14 @@ func (s *Supplier) GetSubListFromFile4Anime(seriesInfo *series.SeriesInfo) ([]su
 		return nil, errors.New("Token is empty")
 	}
 
-	return s.downloadSub4Series(seriesInfo)
+	return s.downloadSub4SeriesContext(ctx, seriesInfo)
 }
 
 func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool, episodeMetadata ...series.EpisodeInfo) ([]supplier.SubInfo, error) {
+	return s.getSubListFromFileContext(context.Background(), videoFPath, isMovie, episodeMetadata...)
+}
+
+func (s *Supplier) getSubListFromFileContext(ctx context.Context, videoFPath string, isMovie bool, episodeMetadata ...series.EpisodeInfo) ([]supplier.SubInfo, error) {
 
 	defer func() {
 		s.log.Debugln(s.GetSupplierName(), videoFPath, "End...")
@@ -186,7 +206,10 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool, episodeMe
 			targetEpisodes = append(targetEpisodes, absoluteEpisode)
 		}
 		for _, query := range assrtProviderSearchPlan(mediaInfo, targetSeason, targetEpisode, absoluteEpisode) {
-			searchSubResult, err = s.getSubByKeyWord(query.Query)
+			if err = ctx.Err(); err != nil {
+				return nil, err
+			}
+			searchSubResult, err = s.getSubByKeyWordContext(ctx, query.Query)
 			if err != nil {
 				return nil, err
 			}
@@ -199,7 +222,7 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool, episodeMe
 		// Search aliases from most locally useful to most portable. Candidate
 		// identity validation below makes these fallbacks safe.
 		for _, keyWordType := range assrtSearchKeywordTypes(mediaInfo) {
-			found, searchSubResult, err = s.getSubInfoEx(mediaInfo, videoFPath, true, keyWordType)
+			found, searchSubResult, err = s.getSubInfoExContext(ctx, mediaInfo, videoFPath, true, keyWordType)
 			if err != nil {
 				s.log.Errorln(s.GetSupplierName(), videoFPath, "GetSubInfoEx", keyWordType, err)
 				return nil, err
@@ -215,6 +238,9 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool, episodeMe
 
 	videoFileName := filepath.Base(videoFPath)
 	for index, subInfo := range searchSubResult.Sub.Subs {
+		if err = ctx.Err(); err != nil {
+			return outSubInfoList, err
+		}
 		candidateMatches, rejectedField := assrtCandidateFieldsMatchMediaForEpisodes(mediaInfo, targetEpisodes, subInfo.NativeName, subInfo.Videoname)
 		if !candidateMatches {
 			s.log.Warningf("assrt skip title mismatch: id=%d target_cn=%q target_en=%q candidate=%q",
@@ -223,8 +249,11 @@ func (s *Supplier) getSubListFromFile(videoFPath string, isMovie bool, episodeMe
 		}
 
 		// 获取具体的下载地址
-		oneSubDetail, err := s.getSubDetail(subInfo.Id)
+		oneSubDetail, err := s.getSubDetailContext(ctx, subInfo.Id)
 		if err != nil {
+			if ctx.Err() != nil {
+				return outSubInfoList, ctx.Err()
+			}
 			s.log.Errorln("getSubDetail", err)
 			continue
 		}
@@ -346,6 +375,10 @@ func assrtSearchKeywordTypes(mediaInfo *models.MediaInfo) []string {
 }
 
 func (s *Supplier) getSubInfoEx(mediaInfo *models.MediaInfo, videoFPath string, isMovie bool, keyWordType string) (bool, *SearchSubResult, error) {
+	return s.getSubInfoExContext(context.Background(), mediaInfo, videoFPath, isMovie, keyWordType)
+}
+
+func (s *Supplier) getSubInfoExContext(ctx context.Context, mediaInfo *models.MediaInfo, videoFPath string, isMovie bool, keyWordType string) (bool, *SearchSubResult, error) {
 
 	var searchSubResult *SearchSubResult
 	var err error
@@ -354,7 +387,7 @@ func (s *Supplier) getSubInfoEx(mediaInfo *models.MediaInfo, videoFPath string, 
 		s.log.Errorln(s.GetSupplierName(), videoFPath, "keyWordSelect", err)
 		return false, searchSubResult, err
 	}
-	searchSubResult, err = s.getSubByKeyWord(keyWord)
+	searchSubResult, err = s.getSubByKeyWordContext(ctx, keyWord)
 	if err != nil {
 		s.log.Errorln("getSubByKeyWord", err)
 		return false, searchSubResult, err
@@ -370,15 +403,25 @@ func (s *Supplier) getSubInfoEx(mediaInfo *models.MediaInfo, videoFPath string, 
 }
 
 func (s *Supplier) downloadSub4Series(seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
+	return s.downloadSub4SeriesContext(context.Background(), seriesInfo)
+}
+
+func (s *Supplier) downloadSub4SeriesContext(ctx context.Context, seriesInfo *series.SeriesInfo) ([]supplier.SubInfo, error) {
 	var allSupplierSubInfo = make([]supplier.SubInfo, 0)
 
 	index := 0
 	// 这里拿到的 seriesInfo ，里面包含了，需要下载字幕的 Eps 信息
 	for _, episodeInfo := range seriesInfo.NeedDlEpsKeyList {
+		if err := ctx.Err(); err != nil {
+			return allSupplierSubInfo, err
+		}
 
 		index++
-		one, err := s.getSubListFromFile(episodeInfo.FileFullPath, false, episodeInfo)
+		one, err := s.getSubListFromFileContext(ctx, episodeInfo.FileFullPath, false, episodeInfo)
 		if err != nil {
+			if ctx.Err() != nil {
+				return allSupplierSubInfo, ctx.Err()
+			}
 			s.log.Errorln(s.GetSupplierName(), "getSubListFromFile", episodeInfo.FileFullPath, err)
 			continue
 		}
@@ -400,11 +443,10 @@ func (s *Supplier) downloadSub4Series(seriesInfo *series.SeriesInfo) ([]supplier
 }
 
 func (s *Supplier) getSubByKeyWord(keyword string) (*SearchSubResult, error) {
+	return s.getSubByKeyWordContext(context.Background(), keyword)
+}
 
-	defer func() {
-		time.Sleep(s.theSearchInterval)
-	}()
-
+func (s *Supplier) getSubByKeyWordContext(ctx context.Context, keyword string) (*SearchSubResult, error) {
 	var searchSubResult SearchSubResult
 
 	s.log.Infoln("Search KeyWord:", keyword)
@@ -415,7 +457,11 @@ func (s *Supplier) getSubByKeyWord(keyword string) (*SearchSubResult, error) {
 	}
 	httpClient.SetTimeout(assrtSearchTimeout)
 	httpClient.SetRetryCount(0)
+	if err = s.waitRateLimit(ctx); err != nil {
+		return nil, err
+	}
 	resp, err := httpClient.R().
+		SetContext(ctx).
 		Get(settings.Get().AdvancedSettings.SuppliersSettings.Assrt.RootUrl +
 			"/sub/search?q=" + tt +
 			"&cnt=15&pos=0" +
@@ -458,11 +504,10 @@ func (s *Supplier) getSubByKeyWord(keyword string) (*SearchSubResult, error) {
 }
 
 func (s *Supplier) getSubDetail(subID int) (OneSubDetail, error) {
+	return s.getSubDetailContext(context.Background(), subID)
+}
 
-	defer func() {
-		time.Sleep(s.theSearchInterval)
-	}()
-
+func (s *Supplier) getSubDetailContext(ctx context.Context, subID int) (OneSubDetail, error) {
 	var subDetail OneSubDetail
 
 	httpClient, err := pkg.NewHttpClient()
@@ -471,7 +516,11 @@ func (s *Supplier) getSubDetail(subID int) (OneSubDetail, error) {
 	}
 	httpClient.SetTimeout(assrtDetailTimeout)
 	httpClient.SetRetryCount(0)
+	if err = s.waitRateLimit(ctx); err != nil {
+		return subDetail, err
+	}
 	resp, err := httpClient.R().
+		SetContext(ctx).
 		SetQueryParams(map[string]string{
 			"token": settings.Get().SubtitleSources.AssrtSettings.Token,
 			"id":    strconv.Itoa(subID),
@@ -500,6 +549,21 @@ func (s *Supplier) getSubDetail(subID int) (OneSubDetail, error) {
 	}
 
 	return subDetail, nil
+}
+
+func (s *Supplier) waitRateLimit(ctx context.Context) error {
+	wait := time.Until(s.lastRequestAt.Add(s.theSearchInterval))
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	s.lastRequestAt = time.Now()
+	return nil
 }
 
 func (s *Supplier) getUserInfo() (UserInfo, error) {

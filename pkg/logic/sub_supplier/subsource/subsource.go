@@ -40,6 +40,19 @@ const (
 	providerUserAgent = "ChineseSubFinder-SubSource/1.0"
 )
 
+// SubSource expects these API identifiers, not the display labels shown in
+// subtitle results. Try the historically broad BG-code bucket first, then
+// more specific variants until enough downloadable candidates are found.
+var chineseLanguageCodes = []string{
+	"chinese_bg_code",
+	"chinese_bilingual",
+	"chinese_simplified",
+	"chinese_traditional",
+	"chinese",
+	"big_5_code",
+	"chinese_cantonese",
+}
+
 type Supplier struct {
 	log            *logrus.Logger
 	fileDownloader *file_downloader.FileDownloader
@@ -101,11 +114,15 @@ func (s *Supplier) GetSubListFromFile4MovieContext(ctx context.Context, videoPat
 	if err != nil || movieID <= 0 {
 		return []supplier.SubInfo{}, err
 	}
-	items, err := s.querySubtitles(ctx, movieID, 0, 0)
+	items, err := s.queryChineseSubtitles(ctx, movieID, settings.Get().AdvancedSettings.Topic)
 	if err != nil {
 		return nil, err
 	}
-	return s.downloadCandidates(ctx, videoPath, items, 0, 0, 0)
+	candidates := make([]downloadableCandidate, 0, len(items))
+	for _, item := range items {
+		candidates = append(candidates, downloadableCandidate{item: item})
+	}
+	return s.downloadCandidates(ctx, videoPath, candidates)
 }
 
 func (s *Supplier) GetSubListFromFile4SeriesContext(ctx context.Context, info *series.SeriesInfo) ([]supplier.SubInfo, error) {
@@ -142,37 +159,28 @@ func (s *Supplier) downloadSeries(ctx context.Context, info *series.SeriesInfo) 
 		if movieID <= 0 {
 			continue
 		}
-		seasonItems, queryErr := s.querySubtitles(ctx, movieID, season, 0)
+		// Query every supported Chinese category for series: a category can
+		// contain unrelated episodes even when it already exceeds Topic.
+		seasonItems, queryErr := s.queryChineseSubtitles(ctx, movieID, 0)
 		if queryErr != nil {
 			s.log.Warningln(s.GetSupplierName(), "season search failed:", queryErr)
 			continue
 		}
-		for _, episode := range bySeason[season] {
-			if err = ctx.Err(); err != nil {
-				return out, err
-			}
-			selected := selectCandidates(seasonItems, episode.Season, episode.Episode, episode.AbsoluteEpisode)
-			if len(selected) == 0 {
-				episodeItems, episodeErr := s.querySubtitles(ctx, movieID, episode.Season, episode.Episode)
-				if episodeErr == nil {
-					selected = selectCandidates(episodeItems, episode.Season, episode.Episode, episode.AbsoluteEpisode)
-				}
-			}
-			if len(selected) == 0 && episode.AbsoluteEpisode > 0 && episode.AbsoluteEpisode != episode.Episode {
-				absoluteItems, absoluteErr := s.querySubtitles(ctx, movieID, 0, episode.AbsoluteEpisode)
-				if absoluteErr != nil {
-					s.log.Warningln(s.GetSupplierName(), "absolute episode search failed:", absoluteErr)
-				} else {
-					selected = selectAbsoluteCandidates(absoluteItems, episode.AbsoluteEpisode)
-				}
-			}
-			found, downloadErr := s.downloadCandidates(ctx, episode.FileFullPath, selected, episode.Season, episode.Episode, episode.AbsoluteEpisode)
-			if downloadErr != nil {
-				s.log.Warningln(s.GetSupplierName(), episode.Title, downloadErr)
-				continue
-			}
-			out = append(out, found...)
+		candidates := selectSeriesCandidates(seasonItems, season, bySeason[season])
+		if len(candidates) == 0 || len(bySeason[season]) == 0 {
+			continue
 		}
+		// /movies/search?season=N returns a season-scoped movie ID. The
+		// subtitles endpoint has no episode filter or episode fields, so fetch
+		// each chosen archive once and let the archive episode resolver map it
+		// back to every requested local episode.
+		representative := bySeason[season][0]
+		found, downloadErr := s.downloadCandidates(ctx, representative.FileFullPath, candidates)
+		if downloadErr != nil {
+			s.log.Warningln(s.GetSupplierName(), representative.Title, downloadErr)
+			continue
+		}
+		out = append(out, found...)
 	}
 	return out, nil
 }
@@ -240,17 +248,49 @@ func (s *Supplier) queryTitles(ctx context.Context, params url.Values) (*titleSe
 	return &response, nil
 }
 
-func (s *Supplier) querySubtitles(ctx context.Context, movieID int64, season, episode int) ([]subtitleItem, error) {
+func (s *Supplier) queryChineseSubtitles(ctx context.Context, movieID int64, stopAfter int) ([]subtitleItem, error) {
+	capacity := stopAfter
+	if capacity < 1 {
+		capacity = 1
+	}
+	items := make([]subtitleItem, 0, capacity)
+	seen := make(map[int64]struct{}, capacity)
+	var firstErr error
+	for _, languageCode := range chineseLanguageCodes {
+		languageItems, err := s.querySubtitles(ctx, movieID, languageCode)
+		if err != nil {
+			if ctx.Err() != nil {
+				return items, ctx.Err()
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, item := range languageItems {
+			id := int64(item.SubtitleID)
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			items = append(items, item)
+		}
+		if stopAfter > 0 && len(items) >= stopAfter {
+			break
+		}
+	}
+	if len(items) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return items, nil
+}
+
+func (s *Supplier) querySubtitles(ctx context.Context, movieID int64, languageCode string) ([]subtitleItem, error) {
 	params := url.Values{
-		"language": {"chinese bg code"},
+		"language": {languageCode},
 		"limit":    {"100"},
 		"movieId":  {strconv.FormatInt(movieID, 10)},
-	}
-	if season > 0 {
-		params.Set("seasonNumber", strconv.Itoa(season))
-	}
-	if episode > 0 {
-		params.Set("episodeNumber", strconv.Itoa(episode))
+		"sort":     {"popular"},
 	}
 	var response subtitleSearchResponse
 	if err := s.getJSON(ctx, "subtitles?"+params.Encode(), &response); err != nil {
@@ -261,7 +301,7 @@ func (s *Supplier) querySubtitles(ctx context.Context, movieID int64, season, ep
 	}
 	valid := make([]subtitleItem, 0, len(response.Data))
 	for _, item := range response.Data {
-		if int64(item.SubtitleID) <= 0 || len(item.ReleaseInfo) == 0 || !isChinese(item.Language) {
+		if int64(item.SubtitleID) <= 0 || !isChinese(item.Language) {
 			continue
 		}
 		valid = append(valid, item)
@@ -291,46 +331,59 @@ func (s *Supplier) getJSON(ctx context.Context, path string, target interface{})
 	return nil
 }
 
-func selectCandidates(items []subtitleItem, season, episode, absolute int) []subtitleItem {
+type downloadableCandidate struct {
+	item            subtitleItem
+	season          int
+	episode         int
+	absoluteEpisode int
+	fullSeason      bool
+}
+
+func selectSeriesCandidates(items []subtitleItem, season int, episodes []series.EpisodeInfo) []downloadableCandidate {
 	type ranked struct {
-		item     subtitleItem
-		priority int
+		candidate downloadableCandidate
+		priority  int
 	}
 	rankedItems := make([]ranked, 0, len(items))
 	for _, item := range items {
 		candidateSeason, candidateEpisode := itemEpisode(item)
-		switch {
-		case candidateSeason == season && candidateEpisode == episode:
-			rankedItems = append(rankedItems, ranked{item: item, priority: 0})
-		case candidateEpisode == 0 && (candidateSeason == 0 || candidateSeason == season):
-			rankedItems = append(rankedItems, ranked{item: item, priority: 1})
-		case absolute > 0 && releaseContainsAbsolute(item.ReleaseInfo, absolute):
-			rankedItems = append(rankedItems, ranked{item: item, priority: 2})
+		matched := false
+		for _, target := range episodes {
+			if candidateEpisode > 0 && ((candidateSeason == target.Season && candidateEpisode == target.Episode) ||
+				(candidateSeason == 0 && candidateEpisode == target.Episode)) {
+				rankedItems = append(rankedItems, ranked{candidate: downloadableCandidate{
+					item: item, season: target.Season, episode: target.Episode, absoluteEpisode: target.AbsoluteEpisode,
+				}})
+				matched = true
+				break
+			}
+			if target.AbsoluteEpisode > 0 && target.AbsoluteEpisode != target.Episode &&
+				releaseContainsAbsolute(item.ReleaseInfo, target.AbsoluteEpisode) {
+				rankedItems = append(rankedItems, ranked{candidate: downloadableCandidate{
+					item: item, season: target.Season, episode: target.Episode, absoluteEpisode: target.AbsoluteEpisode,
+				}})
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		if candidateEpisode == 0 && (candidateSeason == 0 || candidateSeason == season) {
+			rankedItems = append(rankedItems, ranked{candidate: downloadableCandidate{
+				item: item, season: season, fullSeason: true,
+			}, priority: 1})
 		}
 	}
 	sort.SliceStable(rankedItems, func(i, j int) bool { return rankedItems[i].priority < rankedItems[j].priority })
-	out := make([]subtitleItem, 0, len(rankedItems))
+	out := make([]downloadableCandidate, 0, len(rankedItems))
 	for _, item := range rankedItems {
-		out = append(out, item.item)
-	}
-	return out
-}
-
-func selectAbsoluteCandidates(items []subtitleItem, absolute int) []subtitleItem {
-	out := make([]subtitleItem, 0)
-	for _, item := range items {
-		_, episode := itemEpisode(item)
-		if episode == absolute || releaseContainsAbsolute(item.ReleaseInfo, absolute) {
-			out = append(out, item)
-		}
+		out = append(out, item.candidate)
 	}
 	return out
 }
 
 func itemEpisode(item subtitleItem) (int, int) {
-	if int(item.SeasonNumber) > 0 || int(item.EpisodeNumber) > 0 {
-		return int(item.SeasonNumber), int(item.EpisodeNumber)
-	}
 	for _, release := range item.ReleaseInfo {
 		_, season, episode, err := decode.GetSeasonAndEpisodeFromSubFileName(release)
 		if err == nil && (season > 0 || episode > 0) {
@@ -349,15 +402,14 @@ func releaseContainsAbsolute(releases []string, episode int) bool {
 	return false
 }
 
-func (s *Supplier) downloadCandidates(ctx context.Context, videoPath string, items []subtitleItem, season, episode, absolute int) ([]supplier.SubInfo, error) {
+func (s *Supplier) downloadCandidates(ctx context.Context, videoPath string, candidates []downloadableCandidate) ([]supplier.SubInfo, error) {
 	limit := settings.Get().AdvancedSettings.Topic
 	if limit <= 0 {
 		return []supplier.SubInfo{}, nil
 	}
 	out := make([]supplier.SubInfo, 0, limit)
-	for _, item := range items {
-		candidateSeason, candidateEpisode := itemEpisode(item)
-		isPack := candidateEpisode == 0
+	for _, candidate := range candidates {
+		item := candidate.item
 		cacheKey := fmt.Sprintf("subsource-%d", int64(item.SubtitleID))
 		oneSub, err := s.fileDownloader.GetWithCustomDownloader(
 			s.GetSupplierName(), int64(len(out)), filepath.Base(videoPath), "subsource://subtitle/"+strconv.FormatInt(int64(item.SubtitleID), 10),
@@ -370,16 +422,13 @@ func (s *Supplier) downloadCandidates(ctx context.Context, videoPath string, ite
 			continue
 		}
 		oneSub.Name = firstRelease(item.ReleaseInfo, filepath.Base(videoPath))
-		oneSub.AbsoluteEpisode = absolute
-		if isPack {
-			oneSub.Season = season
-			if candidateSeason > 0 {
-				oneSub.Season = candidateSeason
-			}
+		oneSub.AbsoluteEpisode = candidate.absoluteEpisode
+		if candidate.fullSeason {
+			oneSub.Season = candidate.season
 			oneSub.Episode = 0
 			oneSub.IsFullSeason = true
 		} else {
-			oneSub.Season, oneSub.Episode = season, episode
+			oneSub.Season, oneSub.Episode = candidate.season, candidate.episode
 		}
 		out = append(out, *oneSub)
 		if len(out) >= limit {
@@ -544,11 +593,9 @@ func (r *subtitleSearchResponse) UnmarshalJSON(data []byte) error {
 }
 
 type subtitleItem struct {
-	SubtitleID    flexInt  `json:"subtitleId"`
-	Language      string   `json:"language"`
-	ReleaseInfo   []string `json:"releaseInfo"`
-	SeasonNumber  flexInt  `json:"seasonNumber"`
-	EpisodeNumber flexInt  `json:"episodeNumber"`
+	SubtitleID  flexInt  `json:"subtitleId"`
+	Language    string   `json:"language"`
+	ReleaseInfo []string `json:"releaseInfo"`
 }
 
 type flexInt int64
