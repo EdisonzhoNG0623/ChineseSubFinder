@@ -239,17 +239,21 @@ func slowSupplierRank(name string) int {
 		return 3
 	case "subsource":
 		return 4
-	case "zimuku":
+	case "animetosho":
 		return 5
-	default:
+	case "addic7ed":
 		return 6
+	case "zimuku":
+		return 7
+	default:
+		return 8
 	}
 }
 
 func providerLimiter(name string) chan struct{} {
 	limit := 4
 	switch strings.ToLower(name) {
-	case "subhd", "zimuku", "assrt":
+	case "subhd", "zimuku", "assrt", "animetosho", "addic7ed":
 		limit = 1
 	case "subtitle_best", "subtitlebest", "open_subtitles", "subsource":
 		limit = 2
@@ -273,7 +277,7 @@ func splitSuppliers(suppliers []ifaces.ISupplier) ([]ifaces.ISupplier, []ifaces.
 
 func isSlow(name string) bool {
 	switch strings.ToLower(name) {
-	case "assrt", "subhd", "zimuku", "subtitle_best", "subtitlebest", "open_subtitles", "subsource":
+	case "assrt", "subhd", "zimuku", "subtitle_best", "subtitlebest", "open_subtitles", "subsource", "animetosho", "addic7ed":
 		return true
 	default:
 		return false
@@ -328,7 +332,7 @@ func supplierTimeoutBounds(name, phase string) (baseline, minimum, maximum time.
 		return 45 * time.Second, 30 * time.Second, 75 * time.Second
 	case "subtitle_best", "subtitlebest":
 		return 30 * time.Second, 10 * time.Second, 45 * time.Second
-	case "open_subtitles", "subsource":
+	case "open_subtitles", "subsource", "animetosho", "addic7ed":
 		return 75 * time.Second, 30 * time.Second, 120 * time.Second
 	default:
 		return 45 * time.Second, 15 * time.Second, 60 * time.Second

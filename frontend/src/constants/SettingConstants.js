@@ -43,6 +43,8 @@ export const DEFAULT_SUB_SOURCE_URL_MAP = {
   a4k: 'https://www.a4k.net',
   subtitle_best: 'https://api.subtitle.best/share-sub/v1',
   subdl: 'https://api.subdl.com',
+  animetosho: 'https://feed.animetosho.org',
+  addic7ed: 'https://www.addic7ed.com',
 };
 
 export const PROXY_TYPE_HTTP = 'http';

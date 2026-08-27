@@ -99,6 +99,8 @@ func NewDownloader(inSubFormatter ifaces.ISubFormatter, fileDownloader *file_dow
 	sitesSequence = append(sitesSequence, common2.SubSiteOpenSubtitles)
 	sitesSequence = append(sitesSequence, common2.SubSiteSubSource)
 	sitesSequence = append(sitesSequence, common2.SubSiteSubDL)
+	sitesSequence = append(sitesSequence, common2.SubSiteAnimeTosho)
+	sitesSequence = append(sitesSequence, common2.SubSiteAddic7ed)
 	sitesSequence = append(sitesSequence, common2.SubSiteA4K)
 	sitesSequence = append(sitesSequence, common2.SubSiteShooter)
 	sitesSequence = append(sitesSequence, common2.SubSiteXunLei)

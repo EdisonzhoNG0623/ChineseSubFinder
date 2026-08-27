@@ -75,3 +75,25 @@ func TestSupplierDiagnosticsExplainWhyEnabledSourceWasNotAttempted(t *testing.T)
 	}
 	t.Fatal("xunlei diagnostic not found")
 }
+
+func TestPublicSupplierDiagnosticsFollowExplicitToggle(t *testing.T) {
+	s := settings.NewSettings(t.TempDir())
+	assertEnabled := func(name string, want bool) {
+		t.Helper()
+		for _, diagnostic := range buildSupplierDiagnostics(s, nil, nil) {
+			if diagnostic.Name == name {
+				if diagnostic.Enabled != want || diagnostic.Configured != want {
+					t.Fatalf("%s enabled/configured = %v/%v, want %v", name, diagnostic.Enabled, diagnostic.Configured, want)
+				}
+				return
+			}
+		}
+		t.Fatalf("diagnostic %s not found", name)
+	}
+	assertEnabled(common.SubSiteAnimeTosho, false)
+	assertEnabled(common.SubSiteAddic7ed, false)
+	s.SubtitleSources.AnimeToshoSettings.Enabled = true
+	s.SubtitleSources.Addic7edSettings.Enabled = true
+	assertEnabled(common.SubSiteAnimeTosho, true)
+	assertEnabled(common.SubSiteAddic7ed, true)
+}

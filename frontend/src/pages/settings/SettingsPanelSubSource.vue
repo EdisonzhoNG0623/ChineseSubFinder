@@ -23,7 +23,7 @@
               <div class="supplier-config-card__name">{{ displayName(item.name) }}</div>
               <div class="text-caption text-grey-7">{{ sourceDescription(item.name) }}</div>
             </div>
-            <q-badge v-if="item.daily_download_limit === 0" outline color="grey">未启用</q-badge>
+            <q-badge v-if="!sourceEnabled(item)" outline color="grey">未启用</q-badge>
             <q-badge v-else-if="item.name === 'a4k'" outline color="warning">自建镜像</q-badge>
             <q-badge v-else outline color="primary">已启用</q-badge>
           </div>
@@ -43,10 +43,30 @@
     <q-separator class="q-my-xl" />
 
     <section aria-labelledby="supplier-credentials-title">
-      <div id="supplier-credentials-title" class="section-title">访问凭据</div>
-      <div class="section-kicker q-mb-md">只有需要账户或订阅的字幕源会出现在这里</div>
+      <div id="supplier-credentials-title" class="section-title">源开关与访问凭据</div>
+      <div class="section-kicker q-mb-md">公开源可直接启用；账户型字幕源需同时填写凭据</div>
 
       <q-list separator class="content-surface">
+        <q-item v-if="credentials.animetosho_settings" tag="label" class="q-pa-md">
+          <q-item-section>
+            <q-item-label class="text-weight-medium">AnimeTosho</q-item-label>
+            <q-item-label caption>仅用于动漫：按标题与播出/绝对集号严格匹配，下载独立简繁中文字幕附件。</q-item-label>
+          </q-item-section>
+          <q-item-section side top>
+            <q-toggle v-model="credentials.animetosho_settings.enabled" aria-label="启用 AnimeTosho" />
+          </q-item-section>
+        </q-item>
+
+        <q-item v-if="credentials.addic7ed_settings" tag="label" class="q-pa-md">
+          <q-item-section>
+            <q-item-label class="text-weight-medium">Addic7ed</q-item-label>
+            <q-item-label caption>仅用于常规剧集：缓存节目 ID，并按季、集和发布版本匹配简繁中文字幕。</q-item-label>
+          </q-item-section>
+          <q-item-section side top>
+            <q-toggle v-model="credentials.addic7ed_settings.enabled" aria-label="启用 Addic7ed" />
+          </q-item-section>
+        </q-item>
+
         <q-item tag="label" class="q-pa-md">
           <q-item-section>
             <q-item-label class="text-weight-medium">Assrt</q-item-label>
@@ -209,6 +229,8 @@ const names = {
   zimuku: '字幕库',
   subtitle_best: 'SubtitleBest',
   subdl: 'SubDL',
+  animetosho: 'AnimeTosho',
+  addic7ed: 'Addic7ed',
 };
 
 const descriptions = {
@@ -216,10 +238,25 @@ const descriptions = {
   subtitle_best: 'API 聚合搜索与精确媒体识别',
   subdl: 'IMDb/TMDB 精确搜索与季包下载',
   assrt: 'Token 鉴权的字幕搜索接口',
+  animetosho: '动漫独立字幕附件与绝对集号回退',
+  addic7ed: '常规剧集简繁字幕与发布版本匹配',
 };
 
 const displayName = (name) => names[name] || name;
 const sourceDescription = (name) => descriptions[name] || '自动搜索候选来源';
+const sourceEnabled = (item) => {
+  if (item.daily_download_limit === 0) return false;
+  const toggles = {
+    assrt: credentials.value.assrt_settings,
+    subtitle_best: credentials.value.subtitle_best_settings,
+    subdl: credentials.value.subdl_settings,
+    animetosho: credentials.value.animetosho_settings,
+    addic7ed: credentials.value.addic7ed_settings,
+    open_subtitles: credentials.value.open_subtitles_settings,
+    subsource: credentials.value.subsource_settings,
+  };
+  return toggles[item.name] ? !!toggles[item.name].enabled : true;
+};
 const handleSubSourceUpdate = (item, data) => {
   const target = formModel.advanced_settings.suppliers_settings[item.name];
   target.root_url = data.url;

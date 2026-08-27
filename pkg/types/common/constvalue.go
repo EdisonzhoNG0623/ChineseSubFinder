@@ -25,6 +25,8 @@ const (
 	SubSiteSubDL            = "subdl"
 	SubSiteOpenSubtitles    = "open_subtitles"
 	SubSiteSubSource        = "subsource"
+	SubSiteAnimeTosho       = "animetosho"
+	SubSiteAddic7ed         = "addic7ed"
 )
 
 const (

@@ -14,6 +14,8 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/file_downloader"
 	subSupplier "github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/a4k"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/addic7ed"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/animetosho"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/assrt"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/opensubtitles"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/shooter"
@@ -141,6 +143,12 @@ func (p *PreDownloadProcess) Init() *PreDownloadProcess {
 
 		if subSource := settings.Get().SubtitleSources.SubSourceSettings; subSource.Enabled && subSource.APIKey != "" {
 			p.SubSupplierHub.AddSubSupplier(subsource.NewSupplier(p.fileDownloader))
+		}
+		if settings.Get().SubtitleSources.AnimeToshoSettings.Enabled {
+			p.SubSupplierHub.AddSubSupplier(animetosho.NewSupplier(p.fileDownloader))
+		}
+		if settings.Get().SubtitleSources.Addic7edSettings.Enabled {
+			p.SubSupplierHub.AddSubSupplier(addic7ed.NewSupplier(p.fileDownloader))
 		}
 
 		if pkg.LiteMode() == false {

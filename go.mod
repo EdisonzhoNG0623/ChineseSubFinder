@@ -46,7 +46,7 @@ require (
 	github.com/spf13/viper v1.14.0
 	github.com/t-tomalak/logrus-easy-formatter v0.0.0-20190827215021-c074f06c5816
 	github.com/tidwall/gjson v1.14.4
-	github.com/ulikunitz/xz v0.5.11 // indirect
+	github.com/ulikunitz/xz v0.5.11
 	github.com/ysmood/gson v0.7.2 // indirect
 	golang.org/x/crypto v0.13.0
 	golang.org/x/net v0.15.0

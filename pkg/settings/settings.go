@@ -307,6 +307,7 @@ func (s *Settings) normalize() {
 	if s.AdvancedSettings.SuppliersSettings == nil {
 		s.AdvancedSettings.SuppliersSettings = defaults.AdvancedSettings.SuppliersSettings
 	}
+	s.AdvancedSettings.SuppliersSettings.ReSetSearchUrl()
 	if s.AdvancedSettings.ScanLogic == nil {
 		s.AdvancedSettings.ScanLogic = defaults.AdvancedSettings.ScanLogic
 	}

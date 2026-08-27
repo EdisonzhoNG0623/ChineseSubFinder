@@ -11,6 +11,8 @@ type SubtitleSources struct {
 	SubDLSettings         SubDLSettings         `json:"subdl_settings"`
 	OpenSubtitlesSettings OpenSubtitlesSettings `json:"open_subtitles_settings"`
 	SubSourceSettings     SubSourceSettings     `json:"subsource_settings"`
+	AnimeToshoSettings    PublicSourceSettings  `json:"animetosho_settings"`
+	Addic7edSettings      PublicSourceSettings  `json:"addic7ed_settings"`
 }
 
 func NewSubtitleSources() *SubtitleSources {

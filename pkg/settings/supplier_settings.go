@@ -14,6 +14,8 @@ type SuppliersSettings struct {
 	Zimuku       *OneSupplierSettings `json:"zimuku"`
 	SubtitleBest *OneSupplierSettings `json:"subtitle_best"`
 	SubDL        *OneSupplierSettings `json:"subdl"`
+	AnimeTosho   *OneSupplierSettings `json:"animetosho"`
+	Addic7ed     *OneSupplierSettings `json:"addic7ed"`
 }
 
 func NewSuppliersSettings() *SuppliersSettings {
@@ -27,6 +29,8 @@ func NewSuppliersSettings() *SuppliersSettings {
 		A4k:          NewOneSupplierSettings(common.SubSiteA4K, common.SubA4kRootUrlDef, common.SubA4kSearchUrl, 0),
 		SubtitleBest: NewOneSupplierSettings(common.SubSiteSubtitleBest, common.SubSubtitleBestRootUrlDef, common.SubSubtitleBestSearchMovieUrl, -1),
 		SubDL:        NewOneSupplierSettings(common.SubSiteSubDL, common.SubDLRootURLDef, common.SubDLSearchURL, -1),
+		AnimeTosho:   NewOneSupplierSettings(common.SubSiteAnimeTosho, common.AnimeToshoRootURLDef, common.AnimeToshoSearchURL, -1),
+		Addic7ed:     NewOneSupplierSettings(common.SubSiteAddic7ed, common.Addic7edRootURLDef, common.Addic7edSearchURL, -1),
 		// 自用模式不设置本地每日硬上限；每次任务仍只下载 Topic 指定的字幕数。
 		SubHD:  NewOneSupplierSettings(common.SubSiteSubHd, common.SubSubHDRootUrlDef, common.SubSubHDSearchUrl, -1),
 		Zimuku: NewOneSupplierSettings(common.SubSiteZiMuKu, common.SubZiMuKuRootUrlDef, common.SubZiMuKuSearchFormatUrl, -1),
@@ -35,6 +39,9 @@ func NewSuppliersSettings() *SuppliersSettings {
 
 // ReSetSearchUrl 因为 SuppliersSettings 中每个网站的 searchUrl 参数没有开放更改，所以如果有变动，需要重新设置
 func (s *SuppliersSettings) ReSetSearchUrl() {
+	if s == nil {
+		return
+	}
 	if s.A4k == nil {
 		s.A4k = NewOneSupplierSettings(common.SubSiteA4K, common.SubA4kRootUrlDef, common.SubA4kSearchUrl, 0)
 	}
@@ -45,11 +52,28 @@ func (s *SuppliersSettings) ReSetSearchUrl() {
 	if isRetiredA4kURL(s.A4k.RootUrl) {
 		s.A4k.DailyDownloadLimit = 0
 	}
+	if s.SubtitleBest == nil {
+		s.SubtitleBest = NewOneSupplierSettings(common.SubSiteSubtitleBest, common.SubSubtitleBestRootUrlDef, common.SubSubtitleBestSearchMovieUrl, -1)
+	}
 	s.SubtitleBest.SearchUrl = common.SubSubtitleBestSearchMovieUrl
 	if s.SubDL == nil {
 		s.SubDL = NewOneSupplierSettings(common.SubSiteSubDL, common.SubDLRootURLDef, common.SubDLSearchURL, -1)
 	}
 	s.SubDL.SearchUrl = common.SubDLSearchURL
+	if s.AnimeTosho == nil {
+		s.AnimeTosho = NewOneSupplierSettings(common.SubSiteAnimeTosho, common.AnimeToshoRootURLDef, common.AnimeToshoSearchURL, -1)
+	}
+	s.AnimeTosho.SearchUrl = common.AnimeToshoSearchURL
+	if s.Addic7ed == nil {
+		s.Addic7ed = NewOneSupplierSettings(common.SubSiteAddic7ed, common.Addic7edRootURLDef, common.Addic7edSearchURL, -1)
+	}
+	s.Addic7ed.SearchUrl = common.Addic7edSearchURL
+	if s.SubHD == nil {
+		s.SubHD = NewOneSupplierSettings(common.SubSiteSubHd, common.SubSubHDRootUrlDef, common.SubSubHDSearchUrl, -1)
+	}
+	if s.Zimuku == nil {
+		s.Zimuku = NewOneSupplierSettings(common.SubSiteZiMuKu, common.SubZiMuKuRootUrlDef, common.SubZiMuKuSearchFormatUrl, -1)
+	}
 	s.SubHD.SearchUrl = common.SubSubHDSearchUrl
 	s.Zimuku.SearchUrl = common.SubZiMuKuSearchFormatUrl
 	// 字幕库旧域名已停用；只迁移内置旧值，保留用户显式配置的镜像站。

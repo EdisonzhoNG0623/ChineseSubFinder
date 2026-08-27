@@ -2,6 +2,8 @@ package base
 
 import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/addic7ed"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/animetosho"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/opensubtitles"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subdl"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier/subhd"
@@ -110,6 +112,12 @@ func (cb *ControllerBase) CheckProxyHandler(c *gin.Context) {
 	}
 	if subSource := settings.Get().SubtitleSources.SubSourceSettings; subSource.Enabled && subSource.APIKey != "" {
 		subSupplierHub.AddSubSupplier(subsource.NewSupplier(cb.fileDownloader))
+	}
+	if settings.Get().SubtitleSources.AnimeToshoSettings.Enabled {
+		subSupplierHub.AddSubSupplier(animetosho.NewSupplier(cb.fileDownloader))
+	}
+	if settings.Get().SubtitleSources.Addic7edSettings.Enabled {
+		subSupplierHub.AddSubSupplier(addic7ed.NewSupplier(cb.fileDownloader))
 	}
 
 	outStatus := subSupplierHub.CheckSubSiteStatus()

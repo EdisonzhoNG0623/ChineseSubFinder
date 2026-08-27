@@ -53,6 +53,8 @@ var supplierDefinitions = []supplierDefinition{
 	{common.SubSiteSubDL, "SubDL", common.SubDLRootURLDef, []string{"电影", "剧集", "绝对集号"}},
 	{common.SubSiteOpenSubtitles, "OpenSubtitles.com", common.OpenSubtitlesRootURLDef, []string{"电影", "剧集", "文件散列", "精确 ID"}},
 	{common.SubSiteSubSource, "SubSource", common.SubSourceRootURLDef, []string{"电影", "剧集", "整季字幕包", "绝对集号"}},
+	{common.SubSiteAnimeTosho, "AnimeTosho", common.AnimeToshoRootURLDef, []string{"动漫", "独立字幕附件", "绝对集号"}},
+	{common.SubSiteAddic7ed, "Addic7ed", common.Addic7edRootURLDef, []string{"剧集", "简繁中文", "版本匹配"}},
 	{common.SubSiteZiMuKu, "字幕库", common.SubZiMuKuRootUrlDef, []string{"电影", "剧集", "浏览器"}},
 	{common.SubSiteSubHd, "SubHD", common.SubSubHDRootUrlDef, []string{"电影", "剧集", "动漫", "绝对集号", "别名回退"}},
 }
@@ -132,6 +134,10 @@ func supplierSettingsByName(s *settings.Settings, name string) *settings.OneSupp
 		return suppliers.SubtitleBest
 	case common.SubSiteSubDL:
 		return suppliers.SubDL
+	case common.SubSiteAnimeTosho:
+		return suppliers.AnimeTosho
+	case common.SubSiteAddic7ed:
+		return suppliers.Addic7ed
 	case common.SubSiteZiMuKu:
 		return suppliers.Zimuku
 	case common.SubSiteSubHd:
@@ -157,6 +163,10 @@ func supplierCredentialConfigured(s *settings.Settings, name string) bool {
 		return cfg.Enabled && strings.TrimSpace(cfg.APIKey) != "" && strings.TrimSpace(cfg.Username) != "" && cfg.Password != ""
 	case common.SubSiteSubSource:
 		return s.SubtitleSources.SubSourceSettings.Enabled && strings.TrimSpace(s.SubtitleSources.SubSourceSettings.APIKey) != ""
+	case common.SubSiteAnimeTosho:
+		return s.SubtitleSources.AnimeToshoSettings.Enabled
+	case common.SubSiteAddic7ed:
+		return s.SubtitleSources.Addic7edSettings.Enabled
 	default:
 		return true
 	}

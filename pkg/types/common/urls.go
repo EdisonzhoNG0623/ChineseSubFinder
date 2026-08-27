@@ -28,4 +28,10 @@ const (
 
 	OpenSubtitlesRootURLDef = "https://api.opensubtitles.com"
 	SubSourceRootURLDef     = "https://api.subsource.net"
+
+	AnimeToshoRootURLDef           = "https://feed.animetosho.org"
+	AnimeToshoSearchURL            = "/json"
+	AnimeToshoAttachmentRootURLDef = "https://animetosho.org"
+	Addic7edRootURLDef             = "https://www.addic7ed.com"
+	Addic7edSearchURL              = "/ajax_loadShow.php"
 )
