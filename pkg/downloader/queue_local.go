@@ -91,6 +91,26 @@ func (d *Downloader) queueDownloaderLocal() {
 		}
 	}
 	// --------------------------------------------------
+	// Missing files must be removed before metadata repair. Otherwise a stale
+	// series job without a reachable tvshow.nfo is retained forever as a local
+	// metadata failure.
+	{
+		isBlue, _, _ := decode.IsFakeBDMVWorked(oneJob.VideoFPath)
+		if isBlue == false && pkg.IsFile(oneJob.VideoFPath) == false {
+			bok, err = d.downloadQueue.Del(oneJob.Id)
+			if err != nil {
+				d.log.Errorln("d.downloadQueue.Del()", err)
+				return
+			}
+			if bok == false {
+				d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%s) == false", oneJob.Id))
+				return
+			}
+			d.log.Infoln(oneJob.VideoFPath, "is missing, Delete This Job")
+			return
+		}
+	}
+	// --------------------------------------------------
 	// Repair legacy series metadata before any supplier call. The nearest
 	// scraped root is authoritative even when an old queue item already has a
 	// non-empty (but overly broad) category directory persisted.
@@ -98,8 +118,8 @@ func (d *Downloader) queueDownloaderLocal() {
 		oldRoot := oneJob.SeriesRootDirPath
 		oldSeason, oldEpisode := oneJob.Season, oneJob.Episode
 		if oneJob.Season <= 0 || oneJob.Episode <= 0 {
-			episodeInfo, metadataErr := decode.GetVideoNfoInfo4OneSeriesEpisode(oneJob.VideoFPath)
-			if metadataErr != nil || episodeInfo.Season <= 0 || episodeInfo.Episode <= 0 {
+			season, episode, source, metadataErr := resolveLegacySeriesEpisode(oneJob.VideoFPath)
+			if metadataErr != nil {
 				blockedErr := fmt.Errorf("series metadata episode not found")
 				d.log.WithFields(map[string]interface{}{
 					"event": "series_identity_blocked", "reason": "episode_metadata_missing", "job_id": oneJob.Id,
@@ -107,8 +127,14 @@ func (d *Downloader) queueDownloaderLocal() {
 				d.downloadQueue.AutoDetectUpdateJobStatus(oneJob, blockedErr)
 				return
 			}
-			oneJob.Season = episodeInfo.Season
-			oneJob.Episode = episodeInfo.Episode
+			oneJob.Season = season
+			oneJob.Episode = episode
+			if source == legacyEpisodeSourceFilename {
+				oneJob.SceneSeason = season
+				oneJob.SceneEpisode = episode
+				oneJob.NumberingSource = "explicit filename recovery"
+				oneJob.NumberingConfidence = 1
+			}
 		}
 		resolvedRoot := decode.GetSeriesDirRootFPath(oneJob.VideoFPath)
 		if resolvedRoot == "" {
@@ -129,25 +155,6 @@ func (d *Downloader) queueDownloaderLocal() {
 			d.log.WithFields(map[string]interface{}{
 				"event": "series_root_repaired", "job_id": oneJob.Id,
 			}).Info("series root repaired from nearest tvshow metadata")
-		}
-	}
-	// --------------------------------------------------
-	// 这个视频文件不存在了
-	{
-		isBlue, _, _ := decode.IsFakeBDMVWorked(oneJob.VideoFPath)
-		if isBlue == false && pkg.IsFile(oneJob.VideoFPath) == false {
-			// 不是蓝光，那么就判断文件是否存在，不存在，那么就标记 ignore
-			bok, err = d.downloadQueue.Del(oneJob.Id)
-			if err != nil {
-				d.log.Errorln("d.downloadQueue.Del()", err)
-				return
-			}
-			if bok == false {
-				d.log.Errorln(fmt.Sprintf("d.downloadQueue.Del(%s) == false", oneJob.Id))
-				return
-			}
-			d.log.Infoln(oneJob.VideoFPath, "is missing, Delete This Job")
-			return
 		}
 	}
 	// --------------------------------------------------

@@ -512,39 +512,52 @@ func GetVideoInfoFromFileFullPath(videoFileFullPath string, isMovie bool) (types
 	}
 }
 
+var seasonEpisodeTokenPattern = regexp.MustCompile(`(?im)(?:^|[\.\s_\-\[\]\(\)])S(\d+).*?E(\d+)(?:[\.\s_\-\[\]\(\)]|$)`)
+
+// GetSeasonAndEpisodeFromEpisodeFileName reports whether a filename contains
+// an explicit SxxExx token. The found result is separate from the numeric
+// values because S00 and E00 are valid explicit library metadata.
+func GetSeasonAndEpisodeFromEpisodeFileName(fileName string) (found bool, season, episode int, err error) {
+	matched := seasonEpisodeTokenPattern.FindStringSubmatch(strings.ToUpper(fileName))
+	if len(matched) < 3 {
+		return false, 0, 0, nil
+	}
+	season, err = GetNumber2int(matched[1])
+	if err != nil {
+		return false, 0, 0, err
+	}
+	episode, err = GetNumber2int(matched[2])
+	if err != nil {
+		return false, 0, 0, err
+	}
+	return true, season, episode, nil
+}
+
 // GetSeasonAndEpisodeFromSubFileName 从文件名推断 季 和 集 的信息 Season Episode，这个应该是次要方案，优先还是从 nfo 文件获取这些信息
 func GetSeasonAndEpisodeFromSubFileName(videoFileName string) (bool, int, int, error) {
 	upperName := strings.ToUpper(videoFileName)
 	// 先进行单个 Episode 的匹配
 	// Killing.Eve.S02E01.Do.You.Know.How
-	var re = regexp.MustCompile(`(?im)(?:^|[\.\s_\-\[\]\(\)])S(\d+).*?E(\d+)(?:[\.\s_\-\[\]\(\)]|$)`)
-	matched := re.FindAllStringSubmatch(upperName, -1)
-	if matched == nil || len(matched) < 1 {
-		// Killing.Eve.S02.Do.You.Know.How
-		// 看看是不是季度字幕打包
-		re = regexp.MustCompile(`(?im)(?:^|[\.\s_\-\[\]\(\)])S(\d+)(?:[\.\s_\-\[\]\(\)]|$)`)
-		matched = re.FindAllStringSubmatch(upperName, -1)
-		if matched == nil || len(matched) < 1 {
-			return false, 0, 0, nil
-		}
-		season, err := GetNumber2int(matched[0][1])
-		if err != nil {
-			return false, 0, 0, err
-		}
-		return true, season, 0, nil
-	} else {
-		// 一集的字幕
-		season, err := GetNumber2int(matched[0][1])
-		if err != nil {
-			return false, 0, 0, err
-		}
-		episode, err := GetNumber2int(matched[0][2])
-		if err != nil {
-			return false, 0, 0, err
-		}
-
+	found, season, episode, err := GetSeasonAndEpisodeFromEpisodeFileName(upperName)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	if found {
 		return false, season, episode, nil
 	}
+
+	// Killing.Eve.S02.Do.You.Know.How
+	// 看看是不是季度字幕打包
+	re := regexp.MustCompile(`(?im)(?:^|[\.\s_\-\[\]\(\)])S(\d+)(?:[\.\s_\-\[\]\(\)]|$)`)
+	matched := re.FindAllStringSubmatch(upperName, -1)
+	if matched == nil || len(matched) < 1 {
+		return false, 0, 0, nil
+	}
+	season, err = GetNumber2int(matched[0][1])
+	if err != nil {
+		return false, 0, 0, err
+	}
+	return true, season, 0, nil
 }
 
 func GetNumber2Float(input string) (float32, error) {

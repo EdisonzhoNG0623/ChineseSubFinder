@@ -178,6 +178,28 @@ func TestGetSeasonAndEpisodeFromFileNameBoundaries(t *testing.T) {
 	}
 }
 
+func TestGetSeasonAndEpisodeFromEpisodeFileNamePreservesExplicitZeroValues(t *testing.T) {
+	tests := []struct {
+		name        string
+		wantFound   bool
+		wantSeason  int
+		wantEpisode int
+	}{
+		{name: "Special - S00E23.mkv", wantFound: true, wantSeason: 0, wantEpisode: 23},
+		{name: "Recap - S04E00.mp4", wantFound: true, wantSeason: 4, wantEpisode: 0},
+		{name: "Unnumbered Episode.mkv", wantFound: false},
+	}
+	for _, test := range tests {
+		found, season, episode, err := GetSeasonAndEpisodeFromEpisodeFileName(test.name)
+		if err != nil {
+			t.Fatalf("%q: %v", test.name, err)
+		}
+		if found != test.wantFound || season != test.wantSeason || episode != test.wantEpisode {
+			t.Fatalf("%q = (%v, %d, %d), want (%v, %d, %d)", test.name, found, season, episode, test.wantFound, test.wantSeason, test.wantEpisode)
+		}
+	}
+}
+
 func TestGetNumber2Float(t *testing.T) {
 	testString := "asd&^%1998.2jh aweo "
 	outNumber, err := GetNumber2Float(testString)
