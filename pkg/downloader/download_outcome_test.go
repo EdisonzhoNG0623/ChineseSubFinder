@@ -11,6 +11,26 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
 )
 
+type controlledContext struct {
+	done chan struct{}
+	err  error
+}
+
+func newControlledContext() *controlledContext {
+	return &controlledContext{done: make(chan struct{})}
+}
+
+func (c *controlledContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *controlledContext) Done() <-chan struct{}       { return c.done }
+func (c *controlledContext) Err() error                  { return c.err }
+func (c *controlledContext) Value(interface{}) interface{} {
+	return nil
+}
+func (c *controlledContext) finish(err error) {
+	c.err = err
+	close(c.done)
+}
+
 func TestSeriesDownloadOutcomeError(t *testing.T) {
 	saveErr := errors.New("write failed")
 	tests := []struct {
@@ -76,6 +96,56 @@ func TestRunSubtitleSaveWithContextWaitsForSaveAfterCancellation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("wrapper did not return after the real save stopped")
+	}
+}
+
+func TestRunSubtitleSaveWithContextKeepsSuccessfulSaveAfterDeadline(t *testing.T) {
+	ctx := newControlledContext()
+	called := false
+	got := runSubtitleSaveWithContext(ctx, func() error {
+		called = true
+		ctx.finish(context.DeadlineExceeded)
+		return nil
+	})
+	if !called || got != nil {
+		t.Fatalf("deadline-crossing successful save called=%t err=%v, want success", called, got)
+	}
+}
+
+func TestRunSubtitleSaveWithContextKeepsSaveErrorAfterDeadline(t *testing.T) {
+	ctx := newControlledContext()
+	want := errors.New("save failed after deadline")
+	got := runSubtitleSaveWithContext(ctx, func() error {
+		ctx.finish(context.DeadlineExceeded)
+		return want
+	})
+	if !errors.Is(got, want) {
+		t.Fatalf("runSubtitleSaveWithContext() = %v, want save error %v", got, want)
+	}
+}
+
+func TestRunSubtitleSaveWithContextKeepsSaveErrorAfterCancellation(t *testing.T) {
+	ctx := newControlledContext()
+	want := errors.New("save failed during shutdown")
+	got := runSubtitleSaveWithContext(ctx, func() error {
+		ctx.finish(context.Canceled)
+		return want
+	})
+	if !errors.Is(got, want) {
+		t.Fatalf("runSubtitleSaveWithContext() = %v, want save error %v", got, want)
+	}
+}
+
+func TestRunSubtitleSaveWithContextSkipsSaveWhenDeadlineAlreadyExceeded(t *testing.T) {
+	ctx := newControlledContext()
+	ctx.finish(context.DeadlineExceeded)
+	called := false
+	got := runSubtitleSaveWithContext(ctx, func() error {
+		called = true
+		return nil
+	})
+	if called || !errors.Is(got, context.DeadlineExceeded) {
+		t.Fatalf("already-expired save called=%t err=%v", called, got)
 	}
 }
 

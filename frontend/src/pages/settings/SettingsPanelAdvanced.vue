@@ -175,8 +175,8 @@
           <q-input
             class="col"
             v-model.number="form.task_queue.one_job_time_out"
-            label="单个任务总超时"
-            shadow-text="包含字幕源搜索、候选处理与保存；超时后按重试策略处理"
+            label="单任务处理超时"
+            shadow-text="限制字幕源搜索和保存启动前处理；已开始的字幕写入与时间轴校正会安全收尾，可能超过此时长"
             standout
             dense
             suffix="秒"
