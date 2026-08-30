@@ -75,7 +75,7 @@ func (d *Downloader) queueDownloaderLocal() {
 			}
 			if d.ScanLogic.Get(videoType, oneJob.VideoFPath) == true {
 				// 需要标记忽略
-				oneJob.JobStatus = taskQueue2.Ignore
+				markJobIgnored(&oneJob)
 				bok, err = d.downloadQueue.Update(oneJob)
 				if err != nil {
 					d.log.Errorln("d.downloadQueue.Update()", err)
@@ -180,7 +180,7 @@ func (d *Downloader) queueDownloaderLocal() {
 		// 如果已经播放过 且 这个任务的优先级 > 3 ，不是很急的那种，说明是可以设置忽略继续下载的
 		if isPlayed == true && oneJob.TaskPriority > task_queue.HighTaskPriorityLevel {
 			// 播放过了，那么就标记 ignore
-			oneJob.JobStatus = taskQueue2.Ignore
+			markJobIgnored(&oneJob)
 			bok, err = d.downloadQueue.Update(oneJob)
 			if err != nil {
 				d.log.Errorln("d.downloadQueue.Update()", err)
@@ -202,7 +202,7 @@ func (d *Downloader) queueDownloaderLocal() {
 			if oneJob.VideoType == common2.Movie {
 				if nowSubSupplierHub.MovieNeedDlSub(d.fileDownloader.MediaInfoDealers, oneJob.VideoFPath, false) == false {
 					// 需要标记忽略
-					oneJob.JobStatus = taskQueue2.Ignore
+					markJobIgnored(&oneJob)
 					bok, err = d.downloadQueue.Update(oneJob)
 					if err != nil {
 						d.log.Errorln("d.downloadQueue.Update()", err)
@@ -241,7 +241,7 @@ func (d *Downloader) queueDownloaderLocal() {
 
 				if needMarkSkip == true {
 					// 需要标记忽略
-					oneJob.JobStatus = taskQueue2.Ignore
+					markJobIgnored(&oneJob)
 					bok, err = d.downloadQueue.Update(oneJob)
 					if err != nil {
 						d.log.Errorln("d.downloadQueue.Update()", err)
