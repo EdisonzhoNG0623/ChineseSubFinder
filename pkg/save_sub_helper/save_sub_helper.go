@@ -1,6 +1,12 @@
 package save_sub_helper
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -48,7 +54,7 @@ func (s *SaveSubHelper) WriteSubFile2VideoPath(videoFileFullPath string, finalSu
 		}
 	}
 	// 最后写入字幕
-	err := pkg.WriteFile(desSubFullPath, finalSubFile.Data)
+	err := writeSubtitleFileAtomically(desSubFullPath, finalSubFile.Data)
 	if err != nil {
 		return err
 	}
@@ -88,4 +94,89 @@ func (s *SaveSubHelper) WriteSubFile2VideoPath(videoFileFullPath string, finalSu
 	}
 
 	return nil
+}
+
+// writeSubtitleFileAtomically writes a sibling temporary file and renames it
+// over the destination. Replacing the directory entry avoids opening an
+// existing subtitle for truncation, which can fail when the media directory is
+// writable but the old subtitle belongs to a different UID.
+func writeSubtitleFileAtomically(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return err
+	}
+
+	// Keep useful sharing permissions from an existing regular subtitle while
+	// ensuring the new, process-owned file remains readable and writable by its
+	// owner for optional post-save conversions. New subtitles keep the legacy
+	// os.Create semantics and let the process umask restrict mode 0666.
+	var replacementMode os.FileMode
+	preserveMode := false
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode().IsRegular() {
+			replacementMode = info.Mode().Perm() | 0o600
+			preserveMode = true
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	temp, err := createSubtitleTempFile(dir)
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	keepTemp := true
+	defer func() {
+		_ = temp.Close()
+		if keepTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	written, err := temp.Write(data)
+	if err != nil {
+		return err
+	}
+	if written != len(data) {
+		return io.ErrShortWrite
+	}
+	if preserveMode {
+		if err = temp.Chmod(replacementMode); err != nil {
+			return err
+		}
+	}
+	if err = temp.Sync(); err != nil {
+		return err
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	keepTemp = false
+	return nil
+}
+
+// createSubtitleTempFile creates a collision-resistant sibling using the
+// same 0666-and-process-umask permission semantics as os.Create. O_EXCL keeps
+// an attacker or another worker from redirecting the temporary path.
+func createSubtitleTempFile(dir string) (*os.File, error) {
+	const maxAttempts = 10
+	var nonce [16]byte
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return nil, err
+		}
+		tempPath := filepath.Join(dir, ".csf-subtitle-"+hex.EncodeToString(nonce[:]))
+		temp, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+		if err == nil {
+			return temp, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("create unique subtitle temporary file: %w", fs.ErrExist)
 }
