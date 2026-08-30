@@ -46,7 +46,7 @@ func (d *DirCache) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (d *DirCache) Set(ctx context.Context, key string, value []byte) error {
-	log.Debugf("Setting cache item %v")
+	log.Debugf("Setting cache item %v", key)
 	if err := os.MkdirAll(d.path, 0777); err != nil {
 		log.Errorf("Could not create cache dir %v: %v", d.path, err)
 		return err

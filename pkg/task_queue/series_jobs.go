@@ -56,6 +56,9 @@ func (t *TaskQueue) GetReadySeriesJobs(seriesRootDirPath string, season int, exc
 		if jobID == excludeJobID {
 			continue
 		}
+		if _, claimed := t.claimedJobs[jobID]; claimed {
+			continue
+		}
 		priorityValue, found := t.taskKeyMap.Get(jobID)
 		if !found {
 			continue

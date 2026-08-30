@@ -21,6 +21,7 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/local_http_proxy_server"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/file_downloader"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/supplier_search"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/mix_media_info"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
@@ -48,7 +49,47 @@ type Supplier struct {
 	tokenConfig    string
 	tokenExpiresAt time.Time
 	remaining      int
+	quotaResetAt   time.Time
+	quotaConfig    string
 	baseURL        string
+	now            func() time.Time
+}
+
+type quotaWindowRegistry struct {
+	mu      sync.Mutex
+	windows map[string]time.Time
+}
+
+var processQuotaWindows = quotaWindowRegistry{windows: make(map[string]time.Time)}
+
+func (r *quotaWindowRegistry) active(configHash string, now time.Time) (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for hash, resetAt := range r.windows {
+		if resetAt.IsZero() || !now.Before(resetAt) {
+			delete(r.windows, hash)
+		}
+	}
+	resetAt, ok := r.windows[configHash]
+	return resetAt, ok
+}
+
+func (r *quotaWindowRegistry) set(configHash string, resetAt time.Time) {
+	if configHash == "" || resetAt.IsZero() {
+		return
+	}
+	r.mu.Lock()
+	if current := r.windows[configHash]; current.After(resetAt) {
+		resetAt = current
+	}
+	r.windows[configHash] = resetAt
+	r.mu.Unlock()
+}
+
+func (r *quotaWindowRegistry) clear(configHash string) {
+	r.mu.Lock()
+	delete(r.windows, configHash)
+	r.mu.Unlock()
 }
 
 func NewSupplier(fileDownloader *file_downloader.FileDownloader) *Supplier {
@@ -78,7 +119,19 @@ func (s *Supplier) GetLogger() *logrus.Logger { return s.log }
 func (s *Supplier) OverDailyDownloadLimit() bool {
 	s.requestLock.Lock()
 	defer s.requestLock.Unlock()
-	return s.remaining == 0
+	now := s.currentTime()
+	configHash := credentialHash(settings.Get().SubtitleSources.OpenSubtitlesSettings)
+	if resetAt, active := processQuotaWindows.active(configHash, now); active {
+		s.remaining, s.quotaResetAt, s.quotaConfig = 0, resetAt, configHash
+		return true
+	}
+	if s.remaining == 0 {
+		if s.quotaConfig == configHash && !s.quotaResetAt.IsZero() {
+			s.log.WithField("quota_reset_at", s.quotaResetAt.UTC().Format(time.RFC3339)).Info("OpenSubtitles quota window recovered")
+		}
+		s.clearQuotaState()
+	}
+	return false
 }
 func (s *Supplier) GetSubListFromFile4Movie(path string) ([]supplier.SubInfo, error) {
 	return s.GetSubListFromFile4MovieContext(context.Background(), path)
@@ -141,6 +194,7 @@ func (s *Supplier) downloadSeries(ctx context.Context, info *series.SeriesInfo) 
 		return []supplier.SubInfo{}, nil
 	}
 	out := make([]supplier.SubInfo, 0)
+	var firstErr error
 	for _, episode := range info.NeedDlEpsKeyList {
 		if err := ctx.Err(); err != nil {
 			return out, err
@@ -162,6 +216,12 @@ func (s *Supplier) downloadSeries(ctx context.Context, info *series.SeriesInfo) 
 		items, err := s.search(ctx, params, episode.Season, episode.Episode)
 		if err != nil {
 			s.log.Warningln(s.GetSupplierName(), episode.Title, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			if isQuotaError(err) {
+				return out, firstErr
+			}
 			continue
 		}
 		if len(items) == 0 && episode.AbsoluteEpisode > 0 && episode.AbsoluteEpisode != episode.Episode {
@@ -170,17 +230,29 @@ func (s *Supplier) downloadSeries(ctx context.Context, info *series.SeriesInfo) 
 			items, err = s.search(ctx, params, 0, episode.AbsoluteEpisode)
 			if err != nil {
 				s.log.Warningln(s.GetSupplierName(), "absolute episode search failed:", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+				if isQuotaError(err) {
+					return out, firstErr
+				}
 				continue
 			}
 		}
 		found, err := s.downloadCandidates(ctx, episode.FileFullPath, items, episode.Season, episode.Episode, episode.AbsoluteEpisode)
+		out = append(out, found...)
 		if err != nil {
 			s.log.Warningln(s.GetSupplierName(), episode.Title, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			if isQuotaError(err) {
+				return out, firstErr
+			}
 			continue
 		}
-		out = append(out, found...)
 	}
-	return out, nil
+	return out, firstErr
 }
 
 func (s *Supplier) configured() error {
@@ -196,8 +268,8 @@ func (s *Supplier) configured() error {
 
 func (s *Supplier) ensureToken(ctx context.Context) error {
 	cfg := settings.Get().SubtitleSources.OpenSubtitlesSettings
-	configHash := fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.APIKey+"\x00"+cfg.Username+"\x00"+cfg.Password)))
-	if s.token != "" && s.tokenConfig == configHash && time.Now().Before(s.tokenExpiresAt) {
+	configHash := credentialHash(cfg)
+	if s.token != "" && s.tokenConfig == configHash && s.currentTime().Before(s.tokenExpiresAt) {
 		return nil
 	}
 	body, err := json.Marshal(map[string]string{"username": cfg.Username, "password": cfg.Password})
@@ -220,7 +292,7 @@ func (s *Supplier) ensureToken(ctx context.Context) error {
 	if err = decodeJSON(response.Body, &result); err != nil || strings.TrimSpace(result.Token) == "" {
 		return errors.New("OpenSubtitles login returned an invalid response")
 	}
-	s.token, s.tokenConfig, s.tokenExpiresAt = result.Token, configHash, time.Now().Add(tokenLifetime)
+	s.token, s.tokenConfig, s.tokenExpiresAt = result.Token, configHash, s.currentTime().Add(tokenLifetime)
 	return nil
 }
 
@@ -290,6 +362,7 @@ func (s *Supplier) downloadCandidates(ctx context.Context, videoPath string, ite
 		return []supplier.SubInfo{}, nil
 	}
 	out := make([]supplier.SubInfo, 0, limit)
+	var firstErr error
 	for _, item := range items {
 		file := item.Attributes.Files[0]
 		cacheKey := fmt.Sprintf("opensubtitles-%d", file.FileID)
@@ -301,6 +374,12 @@ func (s *Supplier) downloadCandidates(ctx context.Context, videoPath string, ite
 		)
 		if err != nil {
 			s.log.Warningln(s.GetSupplierName(), "download failed:", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			if isQuotaError(err) {
+				return out, firstErr
+			}
 			continue
 		}
 		oneSub.Name = firstNonEmpty(item.Attributes.Release, file.FileName, filepath.Base(videoPath))
@@ -310,7 +389,7 @@ func (s *Supplier) downloadCandidates(ctx context.Context, videoPath string, ite
 			break
 		}
 	}
-	return out, nil
+	return out, firstErr
 }
 
 func (s *Supplier) download(ctx context.Context, fileID int64) ([]byte, string, error) {
@@ -328,7 +407,11 @@ func (s *Supplier) download(ctx context.Context, fileID int64) ([]byte, string, 
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotAcceptable {
-		s.remaining = 0
+		resetAt := quotaResetFromResponse(response, s.currentTime())
+		s.markQuotaExhausted(resetAt)
+		s.log.WithField("quota_reset_at", resetAt.UTC().Format(time.RFC3339)).Warn("OpenSubtitles download quota exhausted")
+		return nil, "", supplier_search.NewSupplierError(
+			supplier_search.FailureQuota, resetAt, errors.New("OpenSubtitles download quota exhausted (HTTP 406)"))
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, "", fmt.Errorf("OpenSubtitles download authorization returned HTTP %d", response.StatusCode)
@@ -339,6 +422,12 @@ func (s *Supplier) download(ctx context.Context, fileID int64) ([]byte, string, 
 	}
 	if result.Remaining != nil {
 		s.remaining = *result.Remaining
+		if s.remaining == 0 {
+			s.markQuotaExhausted(parseQuotaReset(result.ResetTimeUTC, s.currentTime()))
+		} else {
+			processQuotaWindows.clear(credentialHash(settings.Get().SubtitleSources.OpenSubtitlesSettings))
+			s.clearQuotaState()
+		}
 	}
 	link, err := safeDownloadURL(result.Link)
 	if err != nil {
@@ -415,6 +504,110 @@ func (s *Supplier) client(timeout time.Duration, restrictDownloadHost bool) *htt
 	return client
 }
 
+// QuotaResetAt exposes the currently known automatic recovery time without
+// exposing credentials or provider response bodies.
+func (s *Supplier) QuotaResetAt() time.Time {
+	s.requestLock.Lock()
+	defer s.requestLock.Unlock()
+	configHash := credentialHash(settings.Get().SubtitleSources.OpenSubtitlesSettings)
+	if resetAt, active := processQuotaWindows.active(configHash, s.currentTime()); active {
+		s.remaining, s.quotaResetAt, s.quotaConfig = 0, resetAt, configHash
+		return resetAt
+	}
+	if s.remaining == 0 {
+		s.clearQuotaState()
+	}
+	return time.Time{}
+}
+
+// RetryAtTime lets supplier_search retain the exact recovery time when it
+// skips this provider before issuing a request.
+func (s *Supplier) RetryAtTime() time.Time { return s.QuotaResetAt() }
+
+func (s *Supplier) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+func credentialHash(cfg settings.OpenSubtitlesSettings) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.APIKey+"\x00"+cfg.Username+"\x00"+cfg.Password)))
+}
+
+func (s *Supplier) markQuotaExhausted(resetAt time.Time) {
+	now := s.currentTime()
+	if resetAt.IsZero() || !resetAt.After(now) {
+		resetAt = nextUTCReset(now)
+	}
+	s.remaining = 0
+	s.quotaResetAt = resetAt
+	s.quotaConfig = credentialHash(settings.Get().SubtitleSources.OpenSubtitlesSettings)
+	processQuotaWindows.set(s.quotaConfig, resetAt)
+}
+
+func (s *Supplier) clearQuotaState() {
+	s.remaining = -1
+	s.quotaResetAt = time.Time{}
+	s.quotaConfig = ""
+}
+
+func nextUTCReset(now time.Time) time.Time {
+	utc := now.UTC()
+	return time.Date(utc.Year(), utc.Month(), utc.Day()+1, 0, 0, 0, 0, time.UTC)
+}
+
+func quotaResetFromResponse(response *http.Response, now time.Time) time.Time {
+	if response == nil {
+		return nextUTCReset(now)
+	}
+	if value := strings.TrimSpace(response.Header.Get("Retry-After")); value != "" {
+		if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds > 0 {
+			return now.Add(time.Duration(seconds) * time.Second)
+		}
+		if parsed, err := http.ParseTime(value); err == nil && parsed.After(now) {
+			return parsed
+		}
+	}
+	if parsed := parseQuotaReset(response.Header.Get("X-RateLimit-Reset"), now); parsed.After(now) {
+		return parsed
+	}
+	var payload struct {
+		ResetTimeUTC string `json:"reset_time_utc"`
+		ResetTime    string `json:"reset_time"`
+	}
+	if response.Body != nil {
+		_ = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&payload)
+	}
+	if parsed := parseQuotaReset(firstNonEmpty(payload.ResetTimeUTC, payload.ResetTime), now); parsed.After(now) {
+		return parsed
+	}
+	return nextUTCReset(now)
+}
+
+func parseQuotaReset(value string, now time.Time) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	if unix, err := strconv.ParseInt(value, 10, 64); err == nil {
+		// Rate-limit headers normally carry a Unix timestamp. Small positive
+		// values are treated as a relative number of seconds.
+		if unix > now.Unix() {
+			return time.Unix(unix, 0)
+		}
+		if unix > 0 && unix < 7*24*60*60 {
+			return now.Add(time.Duration(unix) * time.Second)
+		}
+	}
+	for _, layout := range []string{time.RFC3339, time.RFC1123, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
 func decodeJSON(reader io.Reader, target interface{}) error {
 	return json.NewDecoder(io.LimitReader(reader, maxJSONSize)).Decode(target)
 }
@@ -484,6 +677,11 @@ func firstNonEmpty(values ...string) string {
 	return "subtitle"
 }
 
+func isQuotaError(err error) bool {
+	var providerErr *supplier_search.SupplierError
+	return errors.As(err, &providerErr) && providerErr.Kind == supplier_search.FailureQuota
+}
+
 type loginResponse struct {
 	Token string `json:"token"`
 }
@@ -519,7 +717,8 @@ type subtitleFile struct {
 }
 
 type downloadResponse struct {
-	Link      string `json:"link"`
-	FileName  string `json:"file_name"`
-	Remaining *int   `json:"remaining"`
+	Link         string `json:"link"`
+	FileName     string `json:"file_name"`
+	Remaining    *int   `json:"remaining"`
+	ResetTimeUTC string `json:"reset_time_utc"`
 }

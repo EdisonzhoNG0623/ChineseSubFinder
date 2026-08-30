@@ -2,21 +2,27 @@ package v1
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
 	backend2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/backend"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/emby"
 	task_queue3 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
 
 	task_queue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/task_queue"
 	"github.com/gin-gonic/gin"
 )
+
+var errDownloadingPriorityChange = errors.New("cannot change priority while a job is downloading; reset or ignore it first")
 
 func (cb *ControllerBase) JobsListHandler(c *gin.Context) {
 	var err error
@@ -43,55 +49,106 @@ func (cb *ControllerBase) JobsListHandler(c *gin.Context) {
 }
 
 func (cb *ControllerBase) ChangeJobStatusHandler(c *gin.Context) {
-	var err error
-	defer func() {
-		// 统一的异常处理
-		cb.ErrorProcess(c, "JobsListHandler", err)
-	}()
-
 	desJobStatus := backend2.ReqChangeJobStatus{}
-	err = c.ShouldBindJSON(&desJobStatus)
-	if err != nil {
+	if err := c.ShouldBindJSON(&desJobStatus); err != nil {
+		c.JSON(http.StatusBadRequest, backend2.ReplyCommon{Message: "invalid request: " + err.Error()})
+		return
+	}
+	if strings.TrimSpace(desJobStatus.Id) == "" {
+		c.JSON(http.StatusBadRequest, backend2.ReplyCommon{Message: "job id is required"})
 		return
 	}
 
 	bok, nowOneJob := cb.cronHelper.DownloadQueue.GetOneJobByID(desJobStatus.Id)
 	if bok == false {
-		c.JSON(http.StatusOK, backend2.ReplyCommon{Message: "job not found"})
+		c.JSON(http.StatusNotFound, backend2.ReplyCommon{Message: "job not found"})
 		return
 	}
 
-	if desJobStatus.TaskPriority == "high" {
-		// high
-		nowOneJob.TaskPriority = task_queue2.HighTaskPriorityLevel
-	} else if desJobStatus.TaskPriority == "mddile" {
-		// middle
-		nowOneJob.TaskPriority = task_queue2.DefaultTaskPriorityLevel
-	} else {
-		// low
-		nowOneJob.TaskPriority = task_queue2.LowTaskPriorityLevel
+	changed, err := applyRequestedJobChanges(&nowOneJob, desJobStatus)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errDownloadingPriorityChange) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, backend2.ReplyCommon{Message: err.Error()})
+		return
 	}
-	// 默认只能把任务改变为这两种状态
-	if desJobStatus.JobStatus == task_queue3.Waiting || desJobStatus.JobStatus == task_queue3.Ignore {
-		nowOneJob.JobStatus = desJobStatus.JobStatus
-	} else {
-		nowOneJob.JobStatus = task_queue3.Waiting
+	if !changed {
+		c.JSON(http.StatusOK, backend2.ReplyCommon{Message: "ok"})
+		return
 	}
-	// A user-triggered Waiting transition bypasses backoff exactly once. This
-	// keeps manual retry responsive without making high-priority failures spin.
-	nowOneJob.ForceRun = nowOneJob.JobStatus == task_queue3.Waiting
 
 	bok, err = cb.cronHelper.DownloadQueue.Update(nowOneJob)
 	if err != nil {
+		cb.log.Errorln("ChangeJobStatusHandler", err)
+		c.JSON(http.StatusInternalServerError, backend2.ReplyCommon{Message: err.Error()})
 		return
 	}
 
 	if bok == false {
-		c.JSON(http.StatusOK, backend2.ReplyCommon{Message: "update job status failed"})
+		c.JSON(http.StatusConflict, backend2.ReplyCommon{Message: "job changed before the update was applied"})
 		return
 	}
 
 	c.JSON(http.StatusOK, backend2.ReplyCommon{Message: "ok"})
+}
+
+func applyRequestedJobChanges(job *task_queue3.OneJob, request backend2.ReqChangeJobStatus) (bool, error) {
+	if job == nil {
+		return false, fmt.Errorf("job is required")
+	}
+	if request.TaskPriority == nil && request.JobStatus == nil {
+		return false, fmt.Errorf("no job changes requested")
+	}
+
+	updated := *job
+	if request.TaskPriority != nil {
+		priority, ok := requestedTaskPriority(*request.TaskPriority)
+		if !ok {
+			return false, fmt.Errorf("unsupported task priority %q", *request.TaskPriority)
+		}
+		if job.JobStatus == task_queue3.Downloading && request.JobStatus == nil && priority != job.TaskPriority {
+			return false, errDownloadingPriorityChange
+		}
+		updated.TaskPriority = priority
+	}
+	if request.JobStatus != nil {
+		switch *request.JobStatus {
+		case task_queue3.Waiting:
+			updated.JobStatus = task_queue3.Waiting
+			// A user-triggered Waiting transition bypasses backoff exactly once.
+			updated.ForceRun = true
+			updated.NotBeforeTime = emby.Time{}
+		case task_queue3.Ignore:
+			updated.JobStatus = task_queue3.Ignore
+			updated.ForceRun = false
+		default:
+			return false, fmt.Errorf("unsupported job status %d", *request.JobStatus)
+		}
+	}
+
+	changed := updated.TaskPriority != job.TaskPriority ||
+		updated.JobStatus != job.JobStatus ||
+		updated.ForceRun != job.ForceRun ||
+		!time.Time(updated.NotBeforeTime).Equal(time.Time(job.NotBeforeTime))
+	if changed {
+		*job = updated
+	}
+	return changed, nil
+}
+
+func requestedTaskPriority(value string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "high", "高":
+		return task_queue2.HighTaskPriorityLevel, true
+	case "middle", "mddile", "中":
+		return task_queue2.DefaultTaskPriorityLevel, true
+	case "low", "低":
+		return task_queue2.LowTaskPriorityLevel, true
+	default:
+		return 0, false
+	}
 }
 
 func (cb *ControllerBase) JobLogHandler(c *gin.Context) {

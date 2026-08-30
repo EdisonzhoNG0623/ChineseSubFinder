@@ -11,6 +11,7 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/supplier_search"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_candidate"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/ifaces"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
@@ -50,7 +51,8 @@ func OneMovieDlSubInAllSiteContext(ctx context.Context, logger *logrus.Logger, S
 		ranked := subtitle_candidate.Rank(items, target)
 		return len(ranked) > 0 && ranked[0].Score >= 100
 	}
-	outSUbInfos, searchErr := supplier_search.RunContext(ctx, logger, Suppliers, supplier_search.NewSearchID("movie"), fastEnough,
+	searchReport := supplier_search.RunContextWithReportForCohort(ctx, logger, Suppliers, supplier_search.NewSearchID("movie"),
+		subtitle_metrics.CohortMovie, fastEnough,
 		func(searchCtx context.Context, oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
 			if contextual, ok := oneSupplier.(ifaces.IMovieSupplierContext); ok {
 				subInfos, err := contextual.GetSubListFromFile4MovieContext(searchCtx, oneVideoFullPath)
@@ -59,6 +61,14 @@ func OneMovieDlSubInAllSiteContext(ctx context.Context, logger *logrus.Logger, S
 			}
 			return OneMovieDlSubInOneSite(logger, oneVideoFullPath, i, oneSupplier)
 		})
+	outSUbInfos := searchReport.Items
+	searchErr := searchReport.OutcomeError()
+	if searchReport.Degraded {
+		logger.WithFields(logrus.Fields{
+			"event": "supplier_search_degraded", "media_type": "movie",
+			"provider_count": len(searchReport.Providers), "candidate_count": len(outSUbInfos),
+		}).Warn("movie supplier search completed with unavailable providers")
+	}
 	if searchErr != nil {
 		logger.WithError(searchErr).Warn("movie supplier search stopped")
 	}

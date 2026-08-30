@@ -19,6 +19,26 @@ import (
 
 // oneVideoSelectBestSub 一个视频，选择最佳的一个字幕（也可以保存所有网站第一个最佳字幕）
 func (d *Downloader) oneVideoSelectBestSub(oneVideoFullPath string, organizeSubFiles []string) error {
+	return d.oneVideoSelectBestSubForCohort(oneVideoFullPath, organizeSubFiles, subtitle_metrics.CohortUnknown)
+}
+
+func supplierMetricsCohort(videoType common.VideoType) subtitle_metrics.MediaCohort {
+	switch videoType {
+	case common.Movie:
+		return subtitle_metrics.CohortMovie
+	case common.Anime:
+		return subtitle_metrics.CohortAnime
+	case common.Series:
+		return subtitle_metrics.CohortSeries
+	default:
+		return subtitle_metrics.CohortUnknown
+	}
+}
+
+// oneVideoSelectBestSubForCohort keeps the legacy selection behavior while
+// attributing successful selection/write conversion to a bounded media cohort.
+func (d *Downloader) oneVideoSelectBestSubForCohort(oneVideoFullPath string, organizeSubFiles []string,
+	cohort subtitle_metrics.MediaCohort) error {
 
 	// 如果没有则直接跳过
 	if organizeSubFiles == nil || len(organizeSubFiles) < 1 {
@@ -60,7 +80,7 @@ func (d *Downloader) oneVideoSelectBestSub(oneVideoFullPath string, organizeSubF
 			d.log.Warnln(outString)
 			return errors.New(outString)
 		}
-		subtitle_metrics.RecordSelection(finalSubFile.FromWhereSite)
+		subtitle_metrics.RecordSelectionForCohort(finalSubFile.FromWhereSite, cohort)
 		/*
 			这里还有一个梗，Emby、jellyfin 支持 default 和 forced 扩展字段
 			但是，plex 只支持 forced
@@ -76,7 +96,7 @@ func (d *Downloader) oneVideoSelectBestSub(oneVideoFullPath string, organizeSubF
 		if err != nil {
 			return errors.New(fmt.Sprintf("SaveMultiSub: %v, writeSubFile2VideoPath, Error: %v ", settings.Get().AdvancedSettings.SaveMultiSub, err))
 		}
-		subtitle_metrics.RecordSave(finalSubFile.FromWhereSite)
+		subtitle_metrics.RecordSaveForCohort(finalSubFile.FromWhereSite, cohort)
 	} else {
 		// 每个网站 Top1 的字幕
 		siteNames, finalSubFiles := d.mk.SelectEachSiteTop1SubFile(organizeSubFiles)
@@ -94,7 +114,7 @@ func (d *Downloader) oneVideoSelectBestSub(oneVideoFullPath string, organizeSubF
 		*/
 		if d.subNameFormatter == subcommon.Emby {
 			for i, file := range finalSubFiles {
-				subtitle_metrics.RecordSelection(file.FromWhereSite)
+				subtitle_metrics.RecordSelectionForCohort(file.FromWhereSite, cohort)
 				setDefault := false
 				if i == 0 {
 					setDefault = true
@@ -103,7 +123,7 @@ func (d *Downloader) oneVideoSelectBestSub(oneVideoFullPath string, organizeSubF
 				if err != nil {
 					return errors.New(fmt.Sprintf("SaveMultiSub: %v, writeSubFile2VideoPath, Error: %v ", settings.Get().AdvancedSettings.SaveMultiSub, err))
 				}
-				subtitle_metrics.RecordSave(file.FromWhereSite)
+				subtitle_metrics.RecordSaveForCohort(file.FromWhereSite, cohort)
 			}
 		} else {
 			// 默认这里就是 normal 模式
@@ -114,12 +134,12 @@ func (d *Downloader) oneVideoSelectBestSub(oneVideoFullPath string, organizeSubF
 				那么就比较麻烦，干脆，normal 的命名格式化实例，就不设置 default 了，forced 不想用，因为可能会跟你手动选择的字幕冲突（下次观看的时候，理论上也可能不会）
 			*/
 			for i := len(finalSubFiles) - 1; i > -1; i-- {
-				subtitle_metrics.RecordSelection(finalSubFiles[i].FromWhereSite)
+				subtitle_metrics.RecordSelectionForCohort(finalSubFiles[i].FromWhereSite, cohort)
 				err = d.SaveSubHelper.WriteSubFile2VideoPath(oneVideoFullPath, finalSubFiles[i], siteNames[i], false, false)
 				if err != nil {
 					return errors.New(fmt.Sprintf("SaveMultiSub: %v, writeSubFile2VideoPath, Error: %v ", settings.Get().AdvancedSettings.SaveMultiSub, err))
 				}
-				subtitle_metrics.RecordSave(finalSubFiles[i].FromWhereSite)
+				subtitle_metrics.RecordSaveForCohort(finalSubFiles[i].FromWhereSite, cohort)
 			}
 		}
 	}

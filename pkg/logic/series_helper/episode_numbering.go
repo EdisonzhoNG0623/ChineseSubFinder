@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,12 @@ var processAnimeResolver struct {
 
 func enrichSeriesEpisodeNumbering(logger *logrus.Logger, seriesInfo *series.SeriesInfo) error {
 	if seriesInfo == nil || len(seriesInfo.NeedDlEpsKeyList) == 0 {
+		return nil
+	}
+	// Anime-Lists cannot classify an ordinary series without any searchable
+	// title or external ID. Avoid loading the remote mapping in that case; this
+	// also keeps supplier dispatch independent from an irrelevant network call.
+	if !seriesInfo.IsAnime && !hasAnimeLookupIdentity(seriesInfo) {
 		return nil
 	}
 	resolver, err := defaultAnimeEpisodeResolver()
@@ -62,6 +69,22 @@ func enrichSeriesEpisodeNumbering(logger *logrus.Logger, seriesInfo *series.Seri
 		return resolveErr
 	}
 	return nil
+}
+
+func hasAnimeLookupIdentity(seriesInfo *series.SeriesInfo) bool {
+	if seriesInfo == nil {
+		return false
+	}
+	if strings.TrimSpace(seriesInfo.ImdbId) != "" || strings.TrimSpace(seriesInfo.TmdbId) != "" ||
+		strings.TrimSpace(seriesInfo.TvdbId) != "" || strings.TrimSpace(seriesInfo.Name) != "" {
+		return true
+	}
+	for _, alias := range seriesInfo.Aliases {
+		if strings.TrimSpace(alias) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func detectAnimeSeries(ctx context.Context, resolver episode_identity.Resolver, seriesInfo *series.SeriesInfo) (bool, error) {

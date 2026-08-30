@@ -2,6 +2,8 @@ package series_helper
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +43,8 @@ type concurrentSeriesSupplier struct {
 	panic   bool
 }
 
+var concurrentSeriesTestSequence atomic.Uint64
+
 func (s *concurrentSeriesSupplier) CheckAlive() (bool, int64)    { return true, 0 }
 func (s *concurrentSeriesSupplier) IsAlive() bool                { return true }
 func (s *concurrentSeriesSupplier) GetSupplierName() string      { return s.name }
@@ -64,9 +68,12 @@ func (s *concurrentSeriesSupplier) GetSubListFromFile4Anime(*series.SeriesInfo) 
 func TestDownloadSubtitleInAllSiteByOneSeriesRunsSuppliersConcurrentlyAndIsolatesPanic(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{})
+	testID := concurrentSeriesTestSequence.Add(1)
+	okName := fmt.Sprintf("ok-%d", testID)
+	panicName := fmt.Sprintf("panic-%d", testID)
 	suppliers := []ifaces.ISupplier{
-		&concurrentSeriesSupplier{name: "ok", started: started, release: release},
-		&concurrentSeriesSupplier{name: "panic", started: started, release: release, panic: true},
+		&concurrentSeriesSupplier{name: okName, started: started, release: release},
+		&concurrentSeriesSupplier{name: panicName, started: started, release: release, panic: true},
 	}
 	seriesInfo := &series.SeriesInfo{
 		DirPath: "/series",
@@ -91,7 +98,7 @@ func TestDownloadSubtitleInAllSiteByOneSeriesRunsSuppliersConcurrentlyAndIsolate
 
 	select {
 	case got := <-done:
-		if len(got) != 1 || got[0].Name != "ok" {
+		if len(got) != 1 || got[0].Name != okName {
 			t.Fatalf("unexpected subtitles after panic isolation: %+v", got)
 		}
 	case <-time.After(time.Second):

@@ -14,6 +14,7 @@ import (
 type Settings struct {
 	SpeedDevMode          bool // 是否为开发模式，代码开启这个会跳过某些流程，加快测试速度
 	configFPath           string
+	SearchPolicyRevision  uint64                 `json:"search_policy_revision,omitempty"`
 	UserInfo              *UserInfo              `json:"user_info"`
 	CommonSettings        *CommonSettings        `json:"common_settings"`
 	SubtitleSources       *SubtitleSources       `json:"subtitle_sources"`
@@ -94,6 +95,13 @@ func SetFullNewSettings(inSettings *Settings) error {
 	inSettings.normalize()
 	nowConfigFPath := _settings.configFPath
 	RestoreMaskedSecrets(inSettings, _settings)
+	policyRevision := _settings.SearchPolicyRevision
+	if searchPolicyChanged(_settings, inSettings) {
+		policyRevision++
+	}
+	// The revision is server-owned. A stale or manipulated UI payload must not
+	// roll it backwards or wake the queue without an actual policy change.
+	inSettings.SearchPolicyRevision = policyRevision
 	inSettings.Check()
 	if err := inSettings.SubtitleSources.Validate(); err != nil {
 		return err

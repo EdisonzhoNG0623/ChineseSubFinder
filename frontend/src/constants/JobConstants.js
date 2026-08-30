@@ -32,7 +32,9 @@ export const ERROR_CATEGORY_META = {
   NONE: { label: '无错误', color: 'grey-6' },
   NO_SUBTITLE: { label: '未命中字幕', color: 'warning' },
   TRANSIENT: { label: '网络/临时错误', color: 'orange-8' },
+  PROVIDER_UNAVAILABLE: { label: '字幕源暂不可用', color: 'orange-9' },
+  QUOTA: { label: '字幕源配额等待', color: 'amber-9' },
   LOCAL: { label: '本地文件错误', color: 'negative' },
-  PROVIDER_BLOCKED: { label: '字幕源限流/封禁', color: 'deep-orange' },
+  PROVIDER_BLOCKED: { label: '字幕源验证/封禁', color: 'deep-orange' },
   UNKNOWN: { label: '未知错误', color: 'grey-8' },
 };

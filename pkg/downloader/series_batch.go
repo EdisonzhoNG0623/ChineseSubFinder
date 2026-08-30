@@ -1,19 +1,26 @@
 package downloader
 
 import (
-	"crypto/sha256"
 	"errors"
-	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/task_queue"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
 	taskQueueTypes "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
 	"github.com/sirupsen/logrus"
 )
+
+func mergeSeriesSearchAliases(seriesInfo *series.SeriesInfo, values ...string) {
+	if seriesInfo == nil {
+		return
+	}
+	aliases := append([]string{seriesInfo.Name}, seriesInfo.Aliases...)
+	aliases = append(aliases, values...)
+	seriesInfo.Aliases = taskQueueTypes.NormalizeSearchAliases(aliases...)
+}
 
 const (
 	newSeriesBatchSize     = 4
@@ -88,21 +95,15 @@ func enrichSeriesBatchJobs(jobs []taskQueueTypes.OneJob, identities map[string]s
 		out[index].NumberingSource = identity.numberingSource
 		out[index].NumberingConfidence = identity.numberingConfidence
 		out[index].SeriesName = identity.seriesName
-		out[index].SearchFingerprint = seriesSearchFingerprint(out[index], identity)
+		out[index].SearchAliases = append([]string(nil), identity.aliases...)
+		out[index].RefreshSearchFingerprint()
 	}
 	return out
 }
 
 func seriesSearchFingerprint(job taskQueueTypes.OneJob, identity seriesIdentity) string {
-	// Versioned and deliberately path-free: this can be exposed in diagnostics
-	// without leaking a library layout, while still showing whether the search
-	// evidence changed between attempts.
-	raw := fmt.Sprintf("v1\x00%s\x00%d\x00%d\x00%d\x00%d\x00%d\x00%s",
-		strings.ToLower(strings.TrimSpace(identity.seriesName)), job.Season, job.Episode,
-		identity.absoluteEpisode, identity.sceneSeason, identity.sceneEpisode,
-		strings.ToLower(strings.TrimSpace(identity.numberingSource)))
-	sum := sha256.Sum256([]byte(raw))
-	return fmt.Sprintf("%x", sum[:12])
+	return taskQueueTypes.SearchEvidenceFingerprintWithAliases(identity.seriesName, identity.aliases, job.Season, job.Episode,
+		identity.absoluteEpisode, identity.sceneSeason, identity.sceneEpisode, identity.numberingSource)
 }
 
 type seriesIdentity struct {
@@ -112,14 +113,19 @@ type seriesIdentity struct {
 	numberingSource     string
 	numberingConfidence float64
 	seriesName          string
+	aliases             []string
 }
 
 func (d *Downloader) completeSeriesBatch(jobs []taskQueueTypes.OneJob, saved map[string]struct{}, saveErrors map[string]error, fallback error) error {
+	if d.ctx != nil && d.ctx.Err() != nil {
+		return d.ctx.Err()
+	}
 	if fallback == nil {
 		fallback = task_queue.ErrNoSubFound
 	}
 	primaryErr := fallback
 	savedCount, errorCount := 0, 0
+	outcomes := make([]task_queue.JobOutcome, 0, len(jobs))
 	for index, job := range jobs {
 		key := pkg.GetEpisodeKeyName(job.Season, job.Episode)
 		outcome := fallback
@@ -132,9 +138,15 @@ func (d *Downloader) completeSeriesBatch(jobs []taskQueueTypes.OneJob, saved map
 		if outcome != nil && !errors.Is(outcome, task_queue.ErrNoSubFound) {
 			errorCount++
 		}
-		d.downloadQueue.AutoDetectUpdateJobStatus(job, outcome)
+		outcomes = append(outcomes, task_queue.JobOutcome{Job: job, Err: outcome})
 		if index == 0 {
 			primaryErr = outcome
+		}
+	}
+	if err := d.downloadQueue.ApplyOutcomesReliable(outcomes); err != nil {
+		d.log.WithError(err).Error("persist series batch outcomes")
+		if primaryErr == nil {
+			primaryErr = err
 		}
 	}
 	d.log.WithFields(logrus.Fields{

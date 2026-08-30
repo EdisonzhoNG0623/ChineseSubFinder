@@ -1212,6 +1212,16 @@ func (v *VideoScanAndRefreshHelper) filterMovieAndSeriesNeedDownloadNormal(norma
 		if bNeedDlSub == false {
 			return nil
 		}
+		if len(seriesInfo.EpList) > 0 {
+			mediaInfo, mediaInfoErr := mix_media_info.GetMixMediaInfo(
+				v.fileDownloader.MediaInfoDealers, seriesInfo.EpList[0].FileFullPath, false)
+			if mediaInfoErr != nil {
+				v.log.WithField("event", "series_search_alias_enrichment_degraded").Warn(
+					"remote series titles unavailable; continuing with local aliases")
+			} else {
+				seriesInfo.Aliases = mergeSeriesSearchAliases(seriesInfo.Aliases, mediaInfo)
+			}
+		}
 
 		for _, episodeInfo := range seriesInfo.NeedDlEpsKeyList {
 
@@ -1233,7 +1243,9 @@ func (v *VideoScanAndRefreshHelper) filterMovieAndSeriesNeedDownloadNormal(norma
 			oneJob.NumberingSource = episodeInfo.NumberingSource
 			oneJob.NumberingConfidence = episodeInfo.NumberingConfidence
 			oneJob.SeriesName = seriesInfo.Name
+			oneJob.SearchAliases = append([]string(nil), seriesInfo.Aliases...)
 			oneJob.SeriesRootDirPath = seriesInfo.DirPath
+			oneJob.RefreshSearchFingerprint()
 
 			bok, err := v.downloadQueue.Add(*oneJob)
 			if err != nil {
@@ -1330,8 +1342,16 @@ func (v *VideoScanAndRefreshHelper) filterMovieAndSeriesNeedDownloadEmby(emby *E
 		if len(embyMixInfos) < 1 {
 			continue
 		}
+		var remoteSeriesInfo *models.MediaInfo
+		mediaInfo, mediaInfoErr := mix_media_info.GetMixMediaInfo(
+			v.fileDownloader.MediaInfoDealers, embyMixInfos[0].PhysicalVideoFileFullPath, false)
+		if mediaInfoErr != nil {
+			v.log.WithField("event", "emby_series_search_alias_enrichment_degraded").Warn(
+				"remote series titles unavailable; continuing with local aliases")
+		} else {
+			remoteSeriesInfo = mediaInfo
+		}
 
-		// 只需要从一集取信息即可
 		for _, mixInfo := range embyMixInfos {
 
 			// 判断是否需要跳过
@@ -1355,6 +1375,14 @@ func (v *VideoScanAndRefreshHelper) filterMovieAndSeriesNeedDownloadEmby(emby *E
 			oneJob.Season = info.Season
 			oneJob.Episode = info.Episode
 			oneJob.SeriesRootDirPath = mixInfo.PhysicalSeriesRootDir
+			oneJob.SeriesName = info.Title
+			if oneJob.SeriesName == "" {
+				oneJob.SeriesName = info.OriginalTitle
+			}
+			oneJob.SearchAliases = task_queue2.NormalizeSearchAliases(
+				info.Title, info.OriginalTitle, filepath.Base(mixInfo.PhysicalSeriesRootDir))
+			oneJob.SearchAliases = mergeSeriesSearchAliases(oneJob.SearchAliases, remoteSeriesInfo)
+			oneJob.RefreshSearchFingerprint()
 
 			bok, err := v.downloadQueue.Add(*oneJob)
 			if err != nil {

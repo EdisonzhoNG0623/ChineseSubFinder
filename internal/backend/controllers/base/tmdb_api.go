@@ -2,8 +2,8 @@ package base
 
 import (
 	"net/http"
+	"time"
 
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/local_http_proxy_server"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/tmdb_api"
@@ -38,30 +38,20 @@ func (cb *ControllerBase) CheckTmdbApiHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, backend.ReplyCommon{Message: "false"})
 		return
 	}
-	// 备份一份
-	bkProxySettings := settings.Get().AdvancedSettings.ProxySettings.CopyOne()
-	// 赋值 Web 传递过来的需要测试的代理参数
-	settings.Get().AdvancedSettings.ProxySettings = &req.ProxySettings
-	defer func() {
-		// 还原
-		settings.Get().AdvancedSettings.ProxySettings = bkProxySettings
-		err = local_http_proxy_server.SetProxyInfo(settings.Get().AdvancedSettings.ProxySettings.GetInfos())
-		if err != nil {
-			return
-		}
-		// 启动代理
-		local_http_proxy_server.GetProxyUrl()
-	}()
-	// 设置代理
-	err = local_http_proxy_server.SetProxyInfo(settings.Get().AdvancedSettings.ProxySettings.GetInfos())
+	// Validate the submitted settings with a request-local transport. Changing
+	// the global proxy bridge here could interrupt queue workers and make their
+	// actual network policy diverge from the persisted search fingerprint.
+	httpClient, err := newIsolatedHTTPClient(req.ProxySettings, time.Minute)
 	if err != nil {
 		return
 	}
+	httpClient = bindHTTPClientContext(httpClient, c.Request.Context())
 	// 开始测试 tmdb api
-	tmdbApi, err := tmdb_api.NewTmdbHelper(
+	tmdbApi, err := tmdb_api.NewTmdbHelperWithHTTPClient(
 		cb.fileDownloader.Log,
 		req.ApiKey,
-		req.UseAlternateBaseURL)
+		req.UseAlternateBaseURL,
+		httpClient)
 	if err != nil {
 		cb.fileDownloader.Log.Errorln("NewTmdbHelper", err)
 		return

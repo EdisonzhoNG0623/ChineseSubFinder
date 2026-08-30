@@ -5,7 +5,7 @@ import (
 )
 
 type ReqChangeJobStatus struct {
-	Id           string               `json:"id"`                           // 任务的唯一 ID
-	TaskPriority string               `json:"task_priority" default:"high"` // 任务的优先级，high or middle or low priority
-	JobStatus    task_queue.JobStatus `json:"job_status"`                   // 任务的状态 允许设置 Waiting(0) or Ignore(5)
+	Id           string                `json:"id"`            // 任务的唯一 ID
+	TaskPriority *string               `json:"task_priority"` // 可选：high、middle 或 low
+	JobStatus    *task_queue.JobStatus `json:"job_status"`    // 可选：Waiting(0) 或 Ignore(5)
 }

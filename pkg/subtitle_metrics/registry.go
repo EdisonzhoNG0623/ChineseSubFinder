@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,41 @@ import (
 )
 
 var attemptBucketUpperMillis = [...]int64{1000, 5000, 15000, 60000, 300000}
+
+const persistenceRetryDelay = 30 * time.Second
+
+// MediaCohort is a bounded label used to keep routing observations for movies,
+// episodic series and anime independent. Unknown values intentionally collapse
+// to the global bucket so callers cannot create unbounded metric cardinality.
+type MediaCohort string
+
+const (
+	CohortUnknown MediaCohort = ""
+	CohortMovie   MediaCohort = "movie"
+	CohortSeries  MediaCohort = "series"
+	CohortAnime   MediaCohort = "anime"
+)
+
+func NormalizeCohort(cohort MediaCohort) MediaCohort {
+	switch MediaCohort(strings.ToLower(strings.TrimSpace(string(cohort)))) {
+	case CohortMovie:
+		return CohortMovie
+	case CohortSeries:
+		return CohortSeries
+	case CohortAnime:
+		return CohortAnime
+	default:
+		return CohortUnknown
+	}
+}
+
+// Label returns the fixed, non-sensitive value used in production logs.
+func (c MediaCohort) Label() string {
+	if normalized := NormalizeCohort(c); normalized != CohortUnknown {
+		return string(normalized)
+	}
+	return "global"
+}
 
 type SupplierRuntime struct {
 	Name                string    `json:"name"`
@@ -25,6 +61,8 @@ type SupplierRuntime struct {
 	Errors              int64     `json:"errors"`
 	Candidates          int64     `json:"candidates"`
 	LastAttemptAt       time.Time `json:"last_attempt_at,omitempty"`
+	LastErrorAt         time.Time `json:"last_error_at,omitempty"`
+	LastErrorCode       string    `json:"last_error_code,omitempty"`
 	LastAttemptMs       int64     `json:"last_attempt_millis"`
 	TotalAttemptMs      int64     `json:"total_attempt_millis"`
 	MaxAttemptMs        int64     `json:"max_attempt_millis"`
@@ -33,6 +71,7 @@ type SupplierRuntime struct {
 	CircuitSkips        int64     `json:"circuit_skips"`
 	Selections          int64     `json:"selections"`
 	Saves               int64     `json:"saves"`
+	LastSaveAt          time.Time `json:"last_save_at,omitempty"`
 	CacheHits           int64     `json:"cache_hits"`
 	EarlyStops          int64     `json:"early_stops"`
 	ConsecutiveErrors   int64     `json:"consecutive_errors"`
@@ -41,11 +80,23 @@ type SupplierRuntime struct {
 }
 
 func RecordSelection(name string) {
-	recordCounter(name, func(record *SupplierRuntime) { record.Selections++ })
+	RecordSelectionForCohort(name, CohortUnknown)
+}
+
+func RecordSelectionForCohort(name string, cohort MediaCohort) {
+	recordCounterForCohort(name, cohort, func(record *SupplierRuntime) { record.Selections++ })
 }
 
 func RecordSave(name string) {
-	recordCounter(name, func(record *SupplierRuntime) { record.Saves++ })
+	RecordSaveForCohort(name, CohortUnknown)
+}
+
+func RecordSaveForCohort(name string, cohort MediaCohort) {
+	now := time.Now()
+	recordCounterForCohort(name, cohort, func(record *SupplierRuntime) {
+		record.Saves++
+		record.LastSaveAt = now
+	})
 }
 
 func RecordCacheHit(name string) {
@@ -53,19 +104,35 @@ func RecordCacheHit(name string) {
 }
 
 func RecordEarlyStop(name string) {
-	recordCounter(name, func(record *SupplierRuntime) { record.EarlyStops++ })
+	RecordEarlyStopForCohort(name, CohortUnknown)
+}
+
+func RecordEarlyStopForCohort(name string, cohort MediaCohort) {
+	recordCounterForCohort(name, cohort, func(record *SupplierRuntime) { record.EarlyStops++ })
 }
 
 func recordCounter(name string, update func(*SupplierRuntime)) {
+	recordCounterForCohort(name, CohortUnknown, update)
+}
+
+func recordCounterForCohort(name string, cohort MediaCohort, update func(*SupplierRuntime)) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return
 	}
+	cohort = NormalizeCohort(cohort)
 	processRegistry.mu.Lock()
 	record := processRegistry.suppliers[name]
 	record.Name = name
 	update(&record)
 	processRegistry.suppliers[name] = record
+	if cohort != CohortUnknown {
+		cohortSuppliers := processRegistry.cohortSuppliersLocked(cohort)
+		cohortRecord := cohortSuppliers[name]
+		cohortRecord.Name = name
+		update(&cohortRecord)
+		cohortSuppliers[name] = cohortRecord
+	}
 	processRegistry.mu.Unlock()
 	processRegistry.schedulePersistence()
 }
@@ -101,20 +168,27 @@ func (s SupplierRuntime) P95AttemptMillis() int64 {
 type registry struct {
 	mu        sync.RWMutex
 	suppliers map[string]SupplierRuntime
+	cohorts   map[MediaCohort]map[string]SupplierRuntime
 
+	flushMu     sync.Mutex
 	persistMu   sync.RWMutex
 	persistPath string
 	persistCh   chan struct{}
 	workerOnce  sync.Once
+
+	persistErrorMu      sync.Mutex
+	lastPersistErrorLog time.Time
 }
 
 type persistedState struct {
-	Version   int                        `json:"version"`
-	Suppliers map[string]SupplierRuntime `json:"suppliers"`
+	Version   int                                   `json:"version"`
+	Suppliers map[string]SupplierRuntime            `json:"suppliers"`
+	Cohorts   map[string]map[string]SupplierRuntime `json:"cohorts,omitempty"`
 }
 
 var processRegistry = registry{
 	suppliers: make(map[string]SupplierRuntime),
+	cohorts:   make(map[MediaCohort]map[string]SupplierRuntime),
 	persistCh: make(chan struct{}, 1),
 }
 
@@ -138,7 +212,7 @@ func ConfigurePersistence(path string) error {
 		if err = json.Unmarshal(data, &state); err != nil {
 			return err
 		}
-		if state.Version != 1 {
+		if state.Version != 1 && state.Version != 2 {
 			return errors.New("unsupported supplier metrics version")
 		}
 		processRegistry.mu.Lock()
@@ -149,6 +223,22 @@ func ConfigurePersistence(path string) error {
 			record.Name = name
 			processRegistry.suppliers[name] = record
 		}
+		if state.Version >= 2 {
+			for rawCohort, suppliers := range state.Cohorts {
+				cohort := NormalizeCohort(MediaCohort(rawCohort))
+				if cohort == CohortUnknown {
+					continue
+				}
+				cohortSuppliers := processRegistry.cohortSuppliersLocked(cohort)
+				for name, record := range suppliers {
+					if strings.TrimSpace(name) == "" {
+						continue
+					}
+					record.Name = name
+					cohortSuppliers[name] = record
+				}
+			}
+		}
 		processRegistry.mu.Unlock()
 	}
 
@@ -156,13 +246,22 @@ func ConfigurePersistence(path string) error {
 }
 
 func FlushPersistence() error {
+	return processRegistry.flushPersistence(writeSnapshot)
+}
+
+func (r *registry) flushPersistence(writer func(string, persistedState) error) error {
+	// Keep the snapshot and its atomic replacement in one critical section. A
+	// slower worker flush must not overwrite a newer explicit shutdown flush.
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
+
 	processRegistry.persistMu.RLock()
 	path := processRegistry.persistPath
 	processRegistry.persistMu.RUnlock()
 	if path == "" {
 		return nil
 	}
-	return writeSnapshot(path, Snapshot())
+	return writer(path, snapshotPersistedState())
 }
 
 func RecordHealth(name, health string, latencyMillis int64, checkedAt, cooldownUntil time.Time) {
@@ -181,6 +280,18 @@ func RecordHealth(name, health string, latencyMillis int64, checkedAt, cooldownU
 // RecordAttempt stores bounded aggregate data only. Media paths, URLs, errors,
 // credentials and candidate titles must never enter this registry.
 func RecordAttempt(name string, duration time.Duration, candidateCount int, err error) {
+	RecordAttemptForCohort(name, CohortUnknown, duration, candidateCount, err)
+}
+
+// RecordAttemptForCohort updates both the legacy global aggregate and one
+// bounded media cohort. It stores counts, a latency histogram and an allowlisted
+// error code only; media names, paths, URLs and raw errors are never retained.
+func RecordAttemptForCohort(name string, cohort MediaCohort, duration time.Duration, candidateCount int, err error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	cohort = NormalizeCohort(cohort)
 	now := time.Now()
 	durationMillis := duration.Milliseconds()
 	if durationMillis < 0 {
@@ -189,6 +300,19 @@ func RecordAttempt(name string, duration time.Duration, candidateCount int, err 
 
 	processRegistry.mu.Lock()
 	record := processRegistry.suppliers[name]
+	updateAttempt(&record, name, now, durationMillis, candidateCount, err)
+	processRegistry.suppliers[name] = record
+	if cohort != CohortUnknown {
+		cohortSuppliers := processRegistry.cohortSuppliersLocked(cohort)
+		cohortRecord := cohortSuppliers[name]
+		updateAttempt(&cohortRecord, name, now, durationMillis, candidateCount, err)
+		cohortSuppliers[name] = cohortRecord
+	}
+	processRegistry.mu.Unlock()
+	processRegistry.schedulePersistence()
+}
+
+func updateAttempt(record *SupplierRuntime, name string, now time.Time, durationMillis int64, candidateCount int, err error) {
 	record.Name = name
 	record.Attempts++
 	record.LastAttemptAt = now
@@ -200,6 +324,25 @@ func RecordAttempt(name string, duration time.Duration, candidateCount int, err 
 	record.AttemptBuckets[attemptBucket(durationMillis)]++
 	if err != nil {
 		record.Errors++
+		record.LastErrorAt = now
+		record.LastErrorCode = classifyError(err)
+		// Some providers return usable partial candidates together with a
+		// degraded/search-continuation error. Keep both signals: routing should
+		// reward the useful result while still applying the failure penalty.
+		if candidateCount > 0 {
+			record.CandidateHits++
+			record.Candidates += int64(candidateCount)
+			if isTimeout(err) {
+				record.Timeouts++
+			}
+			// Usable candidates prove that the provider is still available. Keep
+			// the degraded/error evidence for routing, but do not let repeated
+			// partial success open the unavailability circuit.
+			record.ConsecutiveErrors = 0
+			record.ConsecutiveTimeouts = 0
+			record.CircuitOpenUntil = time.Time{}
+			return
+		}
 		record.ConsecutiveErrors++
 		if isTimeout(err) {
 			record.Timeouts++
@@ -210,20 +353,18 @@ func RecordAttempt(name string, duration time.Duration, candidateCount int, err 
 		if record.ConsecutiveErrors >= 3 || record.ConsecutiveTimeouts >= 2 {
 			record.CircuitOpenUntil = now.Add(circuitCooldown(name))
 		}
-	} else {
-		record.ConsecutiveErrors = 0
-		record.ConsecutiveTimeouts = 0
-		record.CircuitOpenUntil = time.Time{}
-		if candidateCount == 0 {
-			record.EmptyResults++
-		} else {
-			record.CandidateHits++
-			record.Candidates += int64(candidateCount)
-		}
+		return
 	}
-	processRegistry.suppliers[name] = record
-	processRegistry.mu.Unlock()
-	processRegistry.schedulePersistence()
+
+	record.ConsecutiveErrors = 0
+	record.ConsecutiveTimeouts = 0
+	record.CircuitOpenUntil = time.Time{}
+	if candidateCount == 0 {
+		record.EmptyResults++
+	} else {
+		record.CandidateHits++
+		record.Candidates += int64(candidateCount)
+	}
 }
 
 func ShouldAttempt(name string, now time.Time) (bool, time.Time) {
@@ -256,6 +397,60 @@ func Snapshot() map[string]SupplierRuntime {
 	return out
 }
 
+// SnapshotForCohort returns a copy of one bounded cohort. It deliberately does
+// not merge global observations so routing can decide explicitly when a cold
+// start fallback is appropriate.
+func SnapshotForCohort(cohort MediaCohort) map[string]SupplierRuntime {
+	cohort = NormalizeCohort(cohort)
+	if cohort == CohortUnknown {
+		return Snapshot()
+	}
+	processRegistry.mu.RLock()
+	defer processRegistry.mu.RUnlock()
+	suppliers := processRegistry.cohorts[cohort]
+	out := make(map[string]SupplierRuntime, len(suppliers))
+	for name, record := range suppliers {
+		out[name] = record
+	}
+	return out
+}
+
+func (r *registry) cohortSuppliersLocked(cohort MediaCohort) map[string]SupplierRuntime {
+	if r.cohorts == nil {
+		r.cohorts = make(map[MediaCohort]map[string]SupplierRuntime)
+	}
+	suppliers := r.cohorts[cohort]
+	if suppliers == nil {
+		suppliers = make(map[string]SupplierRuntime)
+		r.cohorts[cohort] = suppliers
+	}
+	return suppliers
+}
+
+func snapshotPersistedState() persistedState {
+	processRegistry.mu.RLock()
+	defer processRegistry.mu.RUnlock()
+	state := persistedState{
+		Version:   2,
+		Suppliers: make(map[string]SupplierRuntime, len(processRegistry.suppliers)),
+		Cohorts:   make(map[string]map[string]SupplierRuntime, len(processRegistry.cohorts)),
+	}
+	for name, record := range processRegistry.suppliers {
+		state.Suppliers[name] = record
+	}
+	for cohort, suppliers := range processRegistry.cohorts {
+		if normalized := NormalizeCohort(cohort); normalized == CohortUnknown {
+			continue
+		}
+		copyOfSuppliers := make(map[string]SupplierRuntime, len(suppliers))
+		for name, record := range suppliers {
+			copyOfSuppliers[name] = record
+		}
+		state.Cohorts[string(cohort)] = copyOfSuppliers
+	}
+	return state
+}
+
 func attemptBucket(durationMillis int64) int {
 	for index, upper := range attemptBucketUpperMillis {
 		if durationMillis <= upper {
@@ -267,6 +462,43 @@ func attemptBucket(durationMillis int64) int {
 
 func isTimeout(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+// classifyError converts an arbitrary provider error into a small, stable
+// allowlist. Raw error text can contain credentials, URLs, media names, or
+// provider response bodies and must never be retained by the metrics store.
+func classifyError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if isTimeout(err) {
+		return "TIMEOUT"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "quota"), strings.Contains(message, "rate limit"),
+		strings.Contains(message, "too many requests"), strings.Contains(message, "http 429"),
+		strings.Contains(message, "status code 429"), strings.Contains(message, "http 406"),
+		strings.Contains(message, "status code 406"):
+		return "QUOTA"
+	case strings.Contains(message, "authorization"), strings.Contains(message, "unauthorized"),
+		strings.Contains(message, "authentication"), strings.Contains(message, "api key"),
+		strings.Contains(message, "http 401"), strings.Contains(message, "status code 401"):
+		return "AUTH"
+	case strings.Contains(message, "captcha"), strings.Contains(message, "verification"),
+		strings.Contains(message, "cloudflare"), strings.Contains(message, "forbidden"),
+		strings.Contains(message, "http 403"), strings.Contains(message, "status code 403"):
+		return "BLOCKED"
+	case strings.Contains(message, "connection"), strings.Contains(message, "network"),
+		strings.Contains(message, "dns"), strings.Contains(message, "no such host"),
+		strings.Contains(message, "connection reset"), strings.Contains(message, "connection refused"):
+		return "NETWORK"
+	case strings.Contains(message, "invalid response"), strings.Contains(message, "status code"),
+		strings.Contains(message, "http 5"):
+		return "PROVIDER"
+	default:
+		return "UNKNOWN"
+	}
 }
 
 func circuitCooldown(name string) time.Duration {
@@ -300,7 +532,13 @@ func (r *registry) persistenceWorker() {
 			case <-r.persistCh:
 				continue
 			default:
-				_ = FlushPersistence()
+				if err := FlushPersistence(); err != nil {
+					r.reportPersistenceError(err)
+					// A quiet process may not emit another metric after a transient
+					// filesystem failure. Requeue one coalesced flush so the latest
+					// aggregate snapshot is eventually repaired without a hot loop.
+					time.AfterFunc(persistenceRetryDelay, r.schedulePersistence)
+				}
 				break
 			}
 			break
@@ -308,8 +546,22 @@ func (r *registry) persistenceWorker() {
 	}
 }
 
-func writeSnapshot(path string, suppliers map[string]SupplierRuntime) error {
-	data, err := json.MarshalIndent(persistedState{Version: 1, Suppliers: suppliers}, "", "  ")
+func (r *registry) reportPersistenceError(err error) {
+	if err == nil {
+		return
+	}
+	now := time.Now()
+	r.persistErrorMu.Lock()
+	defer r.persistErrorMu.Unlock()
+	if !r.lastPersistErrorLog.IsZero() && now.Sub(r.lastPersistErrorLog) < 5*time.Minute {
+		return
+	}
+	r.lastPersistErrorLog = now
+	log.Printf("supplier metrics persistence failed: %v", err)
+}
+
+func writeSnapshot(path string, state persistedState) error {
+	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}

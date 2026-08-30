@@ -146,6 +146,7 @@ func (cb *ControllerBase) VideoListAddHandler(c *gin.Context) {
 		oneJob.Season = epsVideoNfoInfo.Season
 		oneJob.Episode = epsVideoNfoInfo.Episode
 		oneJob.SeriesRootDirPath = seriesInfoDirPath
+		oneJob.RefreshSearchFingerprint()
 	}
 
 	bok, err := cb.cronHelper.DownloadQueue.Add(*oneJob)

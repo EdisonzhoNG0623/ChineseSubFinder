@@ -52,18 +52,24 @@ type JobPagination struct {
 }
 
 type QueueSummary struct {
-	Total           int            `json:"total"`
-	ByStatus        map[string]int `json:"by_status"`
-	ByVideoType     map[string]int `json:"by_video_type"`
-	ByErrorCategory map[string]int `json:"by_error_category"`
-	RetryScheduled  int            `json:"retry_scheduled"`
-	ReadyNow        int            `json:"ready_now"`
-	WaitingSeries   int            `json:"waiting_series"`
-	SeriesGroups    int            `json:"series_groups"`
-	BatchableGroups int            `json:"batchable_groups"`
-	EpisodeWaiting  int            `json:"episode_waiting"`
-	NumberingReady  int            `json:"numbering_ready"`
-	MetadataBlocked int            `json:"metadata_blocked"`
+	Total                     int            `json:"total"`
+	ByStatus                  map[string]int `json:"by_status"`
+	ByVideoType               map[string]int `json:"by_video_type"`
+	ByErrorCategory           map[string]int `json:"by_error_category"`
+	ActionableByErrorCategory map[string]int `json:"actionable_by_error_category"`
+	RetryScheduled            int            `json:"retry_scheduled"`
+	BackoffWaiting            int            `json:"backoff_waiting"`
+	ReadyNow                  int            `json:"ready_now"`
+	Downloading               int            `json:"downloading"`
+	EarliestRetryAt           *time.Time     `json:"earliest_retry_at,omitempty"`
+	OldestReadyAt             *time.Time     `json:"oldest_ready_at,omitempty"`
+	LastCompletedAt           *time.Time     `json:"last_completed_at,omitempty"`
+	WaitingSeries             int            `json:"waiting_series"`
+	SeriesGroups              int            `json:"series_groups"`
+	BatchableGroups           int            `json:"batchable_groups"`
+	EpisodeWaiting            int            `json:"episode_waiting"`
+	NumberingReady            int            `json:"numbering_ready"`
+	MetadataBlocked           int            `json:"metadata_blocked"`
 }
 
 type ReplyJobPage struct {

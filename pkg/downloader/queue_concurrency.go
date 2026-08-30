@@ -8,6 +8,7 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/log_helper"
 	subSupplier "github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/supplier_search"
 )
 
 type seriesWorkerLock struct {
@@ -44,34 +45,114 @@ func (d *Downloader) tryStartQueueWorker() bool {
 
 func (d *Downloader) finishQueueWorker(didWork bool) {
 	d.queueWorkerStateLock.Lock()
-	active, shouldCleanup := d.updateQueueWorkerOnFinishLocked(didWork)
-	if shouldCleanup {
-		if err := pkg.ClearRootTmpFolder(); err != nil {
-			d.log.Errorln("ClearRootTmpFolder", err)
-		}
-		if !pkg.LiteMode() {
-			pkg.CloseChrome(d.log)
-		}
-	}
+	active, shouldScheduleCleanup := d.updateQueueWorkerOnFinishLocked(didWork)
 	d.queueWorkerStateLock.Unlock()
 	<-d.queueWorkerSlots
+	if d.downloadQueue != nil {
+		d.downloadQueue.NotifyWorkerAvailable()
+	}
 	d.log.Debugf("Queue worker released active=%d capacity=%d", active, cap(d.queueWorkerSlots))
+	if shouldScheduleCleanup {
+		d.scheduleQueueCleanup()
+	}
 }
 
 // updateQueueWorkerOnFinishLocked updates only the cleanup state machine.
-// The caller holds queueWorkerStateLock so cleanup cannot overlap a newly
-// admitted worker.
-func (d *Downloader) updateQueueWorkerOnFinishLocked(didWork bool) (active int, shouldCleanup bool) {
+func (d *Downloader) updateQueueWorkerOnFinishLocked(didWork bool) (active int, shouldScheduleCleanup bool) {
 	if didWork {
 		d.queueCleanupPending = true
 	}
 	d.activeQueueWorkers--
 	active = d.activeQueueWorkers
-	if active == 0 && d.queueCleanupPending {
-		d.queueCleanupPending = false
-		shouldCleanup = true
+	if active == 0 && d.queueCleanupPending && !d.queueCleanupScheduled {
+		d.queueCleanupScheduled = true
+		shouldScheduleCleanup = true
 	}
-	return active, shouldCleanup
+	return active, shouldScheduleCleanup
+}
+
+// scheduleQueueCleanup never holds a worker slot or queue state lock while a
+// timed-out legacy supplier is still running. Cleanup is attempted only at a
+// process-wide Chrome/tmp idle boundary; a permanently stuck source merely
+// postpones cleanup and cannot stall dispatcher capacity or later calls.
+func (d *Downloader) scheduleQueueCleanup() {
+	d.queueCleanupWG.Add(1)
+	go func() {
+		defer d.queueCleanupWG.Done()
+		defer func() {
+			d.queueWorkerStateLock.Lock()
+			d.queueCleanupScheduled = false
+			d.queueWorkerStateLock.Unlock()
+		}()
+		deferredLogged := false
+		retryDelay := time.Second
+		for {
+			if d.ctx.Err() != nil {
+				return
+			}
+			stop := false
+			retry := false
+			if supplier_search.TryWithSharedResourcesIdle(func() {
+				if d.ctx.Err() != nil {
+					stop = true
+					return
+				}
+				d.queueWorkerStateLock.Lock()
+				defer d.queueWorkerStateLock.Unlock()
+				if d.activeQueueWorkers != 0 || !d.queueCleanupPending {
+					stop = true
+					return
+				}
+				// Holding both the provider registration boundary and worker-state
+				// lock keeps new calls/workers out only for the brief cleanup itself.
+				if err := pkg.ClearRootTmpFolder(); err != nil {
+					d.log.Errorln("ClearRootTmpFolder", err)
+					retry = true
+				}
+				if !pkg.LiteMode() {
+					pkg.CloseChrome(d.log)
+				}
+				if !retry {
+					d.queueCleanupPending = false
+					stop = true
+				}
+			}) {
+				if stop {
+					return
+				}
+				if retry {
+					timer := time.NewTimer(retryDelay)
+					select {
+					case <-timer.C:
+					case <-d.ctx.Done():
+						if !timer.Stop() {
+							select {
+							case <-timer.C:
+							default:
+							}
+						}
+						return
+					}
+					if retryDelay < 30*time.Second {
+						retryDelay *= 2
+						if retryDelay > 30*time.Second {
+							retryDelay = 30 * time.Second
+						}
+					}
+					continue
+				}
+			}
+			if !deferredLogged {
+				d.log.Debug("Queue cleanup deferred until timed-out provider calls finish")
+				deferredLogged = true
+			}
+			select {
+			case <-supplier_search.SharedResourcesIdleChan():
+			case <-d.ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 func (d *Downloader) lockSeriesWorker(seriesRoot string) func() {

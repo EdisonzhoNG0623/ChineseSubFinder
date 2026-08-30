@@ -26,6 +26,7 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/pre_download_process"
 	subSupplier "github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_timeline_fixer"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/supplier_search"
 	common2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
@@ -54,11 +55,13 @@ type Downloader struct {
 	queueWorkerStateLock     sync.Mutex
 	queueLaunchLock          sync.Mutex
 	queueWorkerWG            sync.WaitGroup
+	queueCleanupWG           sync.WaitGroup
 	acceptQueueWorkers       bool
 	queueWorkerSlots         chan struct{}
 	activeQueueWorkers       int
 	activeSeriesWorkers      map[string]int
 	queueCleanupPending      bool
+	queueCleanupScheduled    bool
 	queueLogLock             sync.Mutex
 	queueLogActive           int
 	queueLogBatchID          string
@@ -154,6 +157,8 @@ func (d *Downloader) SupplierCheck() {
 		d.log.Debugln("Download.SupplierCheck() already running")
 		return
 	}
+	finishSharedResourceUse := supplier_search.BeginSharedResourceUse()
+	defer finishSharedResourceUse()
 	d.runSupplierCheck()
 }
 
@@ -234,7 +239,11 @@ func (d *Downloader) StartSupplierCheckAsync() bool {
 	if !atomic.CompareAndSwapInt32(&d.supplierCheckRunning, 0, 1) {
 		return false
 	}
-	go d.runSupplierCheck()
+	finishSharedResourceUse := supplier_search.BeginSharedResourceUse()
+	go func() {
+		defer finishSharedResourceUse()
+		d.runSupplierCheck()
+	}()
 	return true
 }
 
@@ -244,21 +253,31 @@ func (d *Downloader) IsSupplierCheckRunning() bool {
 
 // QueueDownloader 从字幕队列中取一个视频的字幕下载任务出来，并且开始下载
 func (d *Downloader) QueueDownloader() {
+	d.TryQueueDownloader()
+}
+
+// TryQueueDownloader launches one worker when capacity is available and
+// reports whether it was admitted. Event-driven dispatchers use the result to
+// wait for the next queue mutation instead of polling a saturated worker pool.
+func (d *Downloader) TryQueueDownloader() bool {
 	d.queueLaunchLock.Lock()
 	if !d.acceptQueueWorkers || !d.tryStartQueueWorker() {
 		d.queueLaunchLock.Unlock()
-		return
+		return false
 	}
+	finishSharedResourceUse := supplier_search.BeginSharedResourceUse()
 	d.queueWorkerWG.Add(1)
 	d.queueLaunchLock.Unlock()
 
 	go func() {
 		defer d.queueWorkerWG.Done()
+		defer finishSharedResourceUse()
 		// 本地的任务
 		d.queueDownloaderLocal()
 		// 云端分布式的任务
 		d.queueDownloaderCloud()
 	}()
+	return true
 }
 
 func (d *Downloader) Cancel() {
@@ -270,8 +289,26 @@ func (d *Downloader) Cancel() {
 	d.cancel()
 	d.queueLaunchLock.Unlock()
 	d.queueWorkerWG.Wait()
+	d.queueCleanupWG.Wait()
+	flushTaskQueueOnShutdown(d.log, d.downloadQueue)
 	if err := subtitle_metrics.FlushPersistence(); err != nil {
 		d.log.Warningln("flush supplier metrics:", err)
 	}
 	d.log.Infoln("Downloader.Cancel()")
+}
+
+type taskQueueDirtyFlusher interface {
+	FlushDirtyPriorities() error
+}
+
+func flushTaskQueueOnShutdown(log *logrus.Logger, queue taskQueueDirtyFlusher) {
+	if queue == nil {
+		return
+	}
+	if err := queue.FlushDirtyPriorities(); err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"event": "task_queue_shutdown_flush",
+			"phase": "after_worker_join",
+		}).Warn("task queue still has unpersisted priority snapshots during shutdown")
+	}
 }

@@ -3,9 +3,24 @@ package backend
 import "time"
 
 type ScheduleView struct {
-	Status        string    `json:"status"`
-	NextScanAt    time.Time `json:"next_scan_at,omitempty"`
-	ActiveWorkers int       `json:"active_workers"`
+	Status        string           `json:"status"`
+	Phase         string           `json:"phase"`
+	NextScanAt    time.Time        `json:"next_scan_at,omitempty"`
+	NextRetryAt   *time.Time       `json:"next_retry_at,omitempty"`
+	NextActionAt  *time.Time       `json:"next_action_at,omitempty"`
+	LastCycleAt   *time.Time       `json:"last_cycle_at,omitempty"`
+	LastSuccessAt *time.Time       `json:"last_success_at,omitempty"`
+	ActiveWorkers int              `json:"active_workers"`
+	CurrentJobs   []CurrentJobView `json:"current_jobs"`
+}
+
+// CurrentJobView is intentionally bounded and excludes media paths and error
+// bodies. The queue remains the source of truth for full job diagnostics.
+type CurrentJobView struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	VideoType string    `json:"video_type"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type OutcomeCount struct {

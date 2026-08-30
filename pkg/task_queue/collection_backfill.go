@@ -26,6 +26,8 @@ func (t *TaskQueue) MarkSeriesEpisodesDone(seriesRootDirPath string, episodeKeys
 	}
 
 	changedPriorities := make(map[int]struct{})
+	destinationPriorities := make(map[int]struct{})
+	moves := make([]priorityMove, 0)
 	marked := 0
 	for _, jobIDValue := range jobSetValue.(*treeset.Set).Values() {
 		jobID := jobIDValue.(string)
@@ -61,22 +63,26 @@ func (t *TaskQueue) MarkSeriesEpisodesDone(seriesRootDirPath string, episodeKeys
 		job.RetryTimes = 0
 		job.ErrorInfo = ""
 		job.UpdateTime = emby.Time(time.Now())
+		job.StateRevision = nextStateRevision(jobValue.(taskQueue2.OneJob).StateRevision)
 		clearRetrySchedule(&job)
+		t.removeScheduledLocked(jobID)
 
 		if oldPriority != job.TaskPriority {
+			moves = append(moves, priorityMove{jobID: job.Id, from: oldPriority, to: job.TaskPriority, original: jobValue.(taskQueue2.OneJob)})
 			t.taskPriorityMapList[oldPriority].Remove(jobID)
 			changedPriorities[oldPriority] = struct{}{}
 		}
 		t.taskKeyMap.Put(jobID, job.TaskPriority)
 		t.taskPriorityMapList[job.TaskPriority].Put(jobID, job)
+		t.upsertScheduledLocked(job)
 		changedPriorities[job.TaskPriority] = struct{}{}
+		destinationPriorities[job.TaskPriority] = struct{}{}
 		marked++
 	}
 
-	for priority := range changedPriorities {
-		if err := t.save(priority); err != nil {
-			return marked, err
-		}
+	if err := t.saveChangedPrioritiesLocked(changedPriorities, destinationPriorities, moves...); err != nil {
+		return marked, err
 	}
+	t.signalWakeLocked()
 	return marked, nil
 }

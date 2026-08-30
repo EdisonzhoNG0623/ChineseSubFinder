@@ -1,22 +1,26 @@
 package task_queue
 
 import (
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/emby"
 	taskQueue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
 )
 
 const (
-	noSubRetryBase      = 12 * time.Hour
-	noSubRetryMax       = 30 * 24 * time.Hour
-	transientRetryBase  = 30 * time.Minute
-	transientRetryMax   = 6 * time.Hour
-	persistentRetryBase = 12 * time.Hour
-	persistentRetryMax  = 7 * 24 * time.Hour
-	unknownRetryBase    = time.Hour
-	unknownRetryMax     = 24 * time.Hour
+	noSubRetryBase           = 12 * time.Hour
+	noSubRetryMax            = 30 * 24 * time.Hour
+	transientRetryBase       = 30 * time.Minute
+	transientRetryMax        = 6 * time.Hour
+	providerBlockedRetryBase = 6 * time.Hour
+	providerBlockedRetryMax  = 24 * time.Hour
+	persistentRetryBase      = 12 * time.Hour
+	persistentRetryMax       = 7 * 24 * time.Hour
+	unknownRetryBase         = time.Hour
+	unknownRetryMax          = 24 * time.Hour
 )
 
 func retryDelay(oneJob taskQueue2.OneJob) time.Duration {
@@ -29,6 +33,10 @@ func retryDelay(oneJob taskQueue2.OneJob) time.Duration {
 	switch {
 	case isNoSubError(message):
 		return noSubRetryDelay(attempts)
+	case isProviderBlockedError(message):
+		return exponentialBackoff(providerBlockedRetryBase, providerBlockedRetryMax, attempts)
+	case isQuotaError(message), isProviderUnavailableError(message):
+		return exponentialBackoff(transientRetryBase, transientRetryMax, attempts)
 	case isTransientError(message):
 		return exponentialBackoff(transientRetryBase, transientRetryMax, attempts)
 	case isPersistentLocalError(message):
@@ -36,6 +44,32 @@ func retryDelay(oneJob taskQueue2.OneJob) time.Duration {
 	default:
 		return exponentialBackoff(unknownRetryBase, unknownRetryMax, attempts)
 	}
+}
+
+func isQuotaError(message string) bool {
+	markers := []string{"supplier quota exhausted", "quota exhausted", "daily limit", "rate limit", "too many requests", "status code 429", "http 429"}
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isProviderUnavailableError(message string) bool {
+	return strings.Contains(message, "supplier search provider unavailable") ||
+		strings.Contains(message, "supplier search temporary failure") ||
+		strings.Contains(message, "all suppliers unavailable")
+}
+
+func isProviderBlockedError(message string) bool {
+	markers := []string{"supplier search provider blocked", "provider blocked", "verification", "captcha", "cloudflare", "forbidden", "status code 403", "http 403"}
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // noSubRetryDelay keeps one relatively quick retry for newly released media,
@@ -80,6 +114,7 @@ func isNoSubError(message string) bool {
 func isTransientError(message string) bool {
 	transientMarkers := []string{
 		"context deadline exceeded",
+		"context canceled",
 		"timeout",
 		"timed out",
 		"connection reset",
@@ -119,7 +154,28 @@ func isPersistentLocalError(message string) bool {
 }
 
 func nextAttemptAt(oneJob taskQueue2.OneJob) time.Time {
-	if oneJob.ForceRun || oneJob.DownloadTimes == 0 {
+	if notBefore := time.Time(oneJob.NotBeforeTime); !isUnsetRetryTime(notBefore) {
+		return notBefore
+	}
+	if oneJob.ForceRun {
+		return time.Time{}
+	}
+	if oneJob.DownloadTimes == 0 {
+		return time.Time{}
+	}
+	message := strings.ToLower(oneJob.ErrorInfo)
+	// A conclusive miss is valid only for the episode evidence and search
+	// policy actually used by its last attempt. Relevant metadata or supplier
+	// configuration changes wake it immediately; unrelated settings do not.
+	if isNoSubError(message) && searchEvidenceChanged(oneJob) {
+		return time.Time{}
+	}
+	// Provider failures can carry a long persisted cooldown (for example a
+	// daily quota reset or a blocked endpoint). Enabling another source or
+	// correcting its credentials/domain makes that cooldown stale, so retry
+	// immediately. Identity-only metadata changes do not bypass these errors,
+	// and local filesystem failures remain on their original backoff.
+	if isProviderPolicyError(message) && searchPolicyChanged(oneJob) {
 		return time.Time{}
 	}
 	calculated := time.Time(oneJob.UpdateTime).Add(retryDelay(oneJob))
@@ -134,6 +190,30 @@ func nextAttemptAt(oneJob taskQueue2.OneJob) time.Time {
 	return calculated
 }
 
+func isProviderPolicyError(message string) bool {
+	return isQuotaError(message) || isProviderUnavailableError(message) || isProviderBlockedError(message)
+}
+
+func searchPolicyChanged(oneJob taskQueue2.OneJob) bool {
+	if oneJob.LastAttemptPolicyFingerprint == "" {
+		return false
+	}
+	return oneJob.LastAttemptPolicyFingerprint != settings.CurrentSearchPolicyFingerprint()
+}
+
+func searchEvidenceChanged(oneJob taskQueue2.OneJob) bool {
+	// Empty means a pre-fingerprint queue record. Startup migration establishes
+	// the current policy as its baseline so an upgrade does not wake every
+	// historical miss at once. Until then, preserve the persisted schedule.
+	if oneJob.LastAttemptPolicyFingerprint == "" {
+		return false
+	}
+	if oneJob.SearchFingerprint != oneJob.LastAttemptSearchFingerprint {
+		return true
+	}
+	return searchPolicyChanged(oneJob)
+}
+
 // emby.Time serializes its zero value as "0001-01-01T00:00:00" and parses
 // it back in time.Local. That parsed value is not time.Time.IsZero() in
 // non-UTC zones, even though it is the persisted representation of "unset".
@@ -142,12 +222,30 @@ func isUnsetRetryTime(value time.Time) bool {
 }
 
 func scheduleRetry(oneJob *taskQueue2.OneJob, now time.Time) {
+	oneJob.NotBeforeTime = emby.Time{}
 	oneJob.NextAttemptTime = emby.Time(now.Add(retryDelay(*oneJob)))
 	oneJob.ForceRun = false
 }
 
+type retryAtError interface {
+	RetryAtTime() time.Time
+}
+
+func scheduleRetryForError(oneJob *taskQueue2.OneJob, now time.Time, outcome error) {
+	scheduleRetry(oneJob, now)
+	var provider retryAtError
+	if !errors.As(outcome, &provider) {
+		return
+	}
+	retryAt := provider.RetryAtTime()
+	if retryAt.After(time.Time(oneJob.NextAttemptTime)) {
+		oneJob.NextAttemptTime = emby.Time(retryAt)
+	}
+}
+
 func clearRetrySchedule(oneJob *taskQueue2.OneJob) {
 	oneJob.NextAttemptTime = emby.Time{}
+	oneJob.NotBeforeTime = emby.Time{}
 	oneJob.ForceRun = false
 }
 

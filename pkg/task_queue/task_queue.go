@@ -14,20 +14,34 @@ import (
 	task_queue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/cache_center"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/emirpasic/gods/maps/treemap"
 	"github.com/emirpasic/gods/sets/treeset"
 	"github.com/sirupsen/logrus"
 )
 
 type TaskQueue struct {
-	queueName           string                    // 队列的名称
-	log                 *logrus.Logger            // 日志
-	center              *cache_center.CacheCenter // 缓存中心
-	taskPriorityMapList []*treemap.Map            // 这里有 0-10 个优先级划分的存储 List，每Add一个数据的时候需要切换到这个 List 中去 save
-	taskKeyMap          *treemap.Map              // 以每个任务的唯一 JobID 来存储每个 Job 的 优先级在哪里，这样可以快速查询
-	taskGroupBySeries   *treemap.Map              // 以每个任务的 SeriesRootPath 来存储每个任务，然后内层是一个 treeset，后续可以遍历删除即可
-	queueLock           sync.Mutex                // 公用这个锁
+	queueName           string                        // 队列的名称
+	log                 *logrus.Logger                // 日志
+	center              *cache_center.CacheCenter     // 缓存中心
+	persistPriority     func(int, []byte) error       // 可注入的优先级快照写入器
+	taskPriorityMapList []*treemap.Map                // 这里有 0-10 个优先级划分的存储 List，每Add一个数据的时候需要切换到这个 List 中去 save
+	taskKeyMap          *treemap.Map                  // 以每个任务的唯一 JobID 来存储每个 Job 的 优先级在哪里，这样可以快速查询
+	taskGroupBySeries   *treemap.Map                  // 以每个任务的 SeriesRootPath 来存储每个任务，然后内层是一个 treeset，后续可以遍历删除即可
+	waitingSchedule     []scheduledJobHeap            // waiting 任务的逐优先级到期索引
+	doneSchedule        []scheduledJobHeap            // done 任务的逐优先级刷新索引
+	scheduledJobs       map[string]*scheduledJob      // JobID 到索引节点，支持 O(log n) 更新
+	claimedJobs         map[string]string             // batch member JobID -> primary claim ID
+	claimMembers        map[string][]string           // primary claim ID -> reserved JobIDs
+	claimTokens         map[string]uint64             // batch member JobID -> process-local claim generation
+	claimOriginals      map[string]task_queue2.OneJob // primary claim ID -> pre-claim lifecycle snapshot
+	claimPolicies       map[string]string             // primary claim ID -> policy used by this generation
+	nextClaimToken      uint64                        // queueLock 保护的单调领取代次
+	dirtyPriorities     map[int]struct{}              // 部分提交后尚未落盘的优先级快照
+	wakeQueue           chan struct{}                 // 合并的 dispatcher 唤醒信号
+	workerAvailable     chan struct{}                 // worker slot 释放信号（与队列变更分离）
+	nextMaintenanceAt   time.Time                     // 避免每次取任务都全量维护
+	runtimeStats        QueueRuntimeStats             // 低成本回归/诊断计数器
+	queueLock           sync.Mutex                    // 公用这个锁
 }
 
 func NewTaskQueue(center *cache_center.CacheCenter) *TaskQueue {
@@ -35,16 +49,19 @@ func NewTaskQueue(center *cache_center.CacheCenter) *TaskQueue {
 	tq := &TaskQueue{queueName: center.GetName(),
 		log:                 center.Log,
 		center:              center,
+		persistPriority:     center.TaskQueueSave,
 		taskPriorityMapList: make([]*treemap.Map, 0),
 		taskKeyMap:          treemap.NewWithStringComparator(),
 		taskGroupBySeries:   treemap.NewWithStringComparator(),
 	}
+	tq.initializeScheduleIndex()
 	for i := 0; i <= taskPriorityCount; i++ {
 		tq.taskPriorityMapList = append(tq.taskPriorityMapList, treemap.NewWithStringComparator())
 	}
 	tq.read()
 
 	tq.afterRead()
+	tq.rebuildScheduleIndexesLocked()
 
 	return tq
 }
@@ -74,6 +91,20 @@ func (t *TaskQueue) Clear() error {
 	t.taskKeyMap.Clear()
 
 	t.taskGroupBySeries.Clear()
+	for priority := 0; priority <= taskPriorityCount; priority++ {
+		t.waitingSchedule[priority] = nil
+		t.doneSchedule[priority] = nil
+	}
+	t.scheduledJobs = make(map[string]*scheduledJob)
+	t.claimedJobs = make(map[string]string)
+	t.claimMembers = make(map[string][]string)
+	t.claimTokens = make(map[string]uint64)
+	t.claimOriginals = make(map[string]task_queue2.OneJob)
+	t.claimPolicies = make(map[string]string)
+	t.nextClaimToken = 0
+	t.dirtyPriorities = make(map[int]struct{})
+	t.nextMaintenanceAt = time.Time{}
+	t.signalWakeLocked()
 
 	return nil
 }
@@ -110,6 +141,18 @@ func (t *TaskQueue) degrade(oneJob task_queue2.OneJob) task_queue2.OneJob {
 	return t.checkPriority(oneJob)
 }
 
+// nextStateRevision advances the durable per-job generation used to choose a
+// canonical copy after a crash leaves the same job in two priority snapshots.
+// Saturating at MaxUint64 avoids wrapping a newest state back to the legacy
+// zero revision. Reaching the limit is practically impossible, but preserving
+// ordering is safer than silently reusing an older generation.
+func nextStateRevision(current uint64) uint64 {
+	if current == ^uint64(0) {
+		return current
+	}
+	return current + 1
+}
+
 // Add 放入元素，放入的时候会根据 TaskPriority 进行归类，存在的不会新增和更新
 func (t *TaskQueue) Add(oneJob task_queue2.OneJob) (bool, error) {
 	if task_queue2.IsBDMVStreamFile(oneJob.VideoFPath) {
@@ -121,10 +164,39 @@ func (t *TaskQueue) Add(oneJob task_queue2.OneJob) (bool, error) {
 	t.queueLock.Lock()
 
 	if t.isExist(oneJob.Id) == true {
+		// A recurring library scan can discover better episode numbering after a
+		// conclusive miss (for example after metadata or anime mapping repair).
+		// Merge only search-relevant evidence into that existing retry record;
+		// lifecycle state and backoff remain authoritative.
+		if merged, changed := t.mergeNoSubtitleEvidenceLocked(oneJob); changed {
+			current, _ := t.jobByIDLocked(merged.Id)
+			oldSeriesRoot := current.SeriesRootDirPath
+			merged.StateRevision = nextStateRevision(current.StateRevision)
+			t.taskPriorityMapList[merged.TaskPriority].Put(merged.Id, merged)
+			if oldSeriesRoot != merged.SeriesRootDirPath {
+				t.removeJobFromSeriesIndex(oldSeriesRoot, merged.Id)
+				t.addJobToSeriesIndex(merged.SeriesRootDirPath, merged.Id)
+			}
+			t.upsertScheduledLocked(merged)
+			if err := t.save(merged.TaskPriority); err != nil {
+				// Persistence rejected the improved evidence. Restore every derived
+				// in-memory index so a later scan can retry the merge instead of
+				// believing the unpersisted fingerprint is authoritative.
+				t.taskPriorityMapList[current.TaskPriority].Put(current.Id, current)
+				if oldSeriesRoot != merged.SeriesRootDirPath {
+					t.removeJobFromSeriesIndex(merged.SeriesRootDirPath, merged.Id)
+					t.addJobToSeriesIndex(oldSeriesRoot, current.Id)
+				}
+				t.upsertScheduledLocked(current)
+				return false, err
+			}
+			t.signalWakeLocked()
+		}
 		return false, nil
 	}
 	// 检查权限范围
 	oneJob = t.checkPriority(oneJob)
+	oneJob.StateRevision = nextStateRevision(0)
 	// 插入到统一的 KeyMap
 	t.taskKeyMap.Put(oneJob.Id, oneJob.TaskPriority)
 	// 分配到具体的优先级 map 中
@@ -142,10 +214,16 @@ func (t *TaskQueue) Add(oneJob task_queue2.OneJob) (bool, error) {
 		nowJobIDSet.Add(oneJob.Id)
 		t.taskGroupBySeries.Put(oneJob.SeriesRootDirPath, nowJobIDSet)
 	}
+	t.upsertScheduledLocked(oneJob)
 	err := t.save(oneJob.TaskPriority)
 	if err != nil {
+		t.removeScheduledLocked(oneJob.Id)
+		t.removeJobFromSeriesIndex(oneJob.SeriesRootDirPath, oneJob.Id)
+		t.taskPriorityMapList[oneJob.TaskPriority].Remove(oneJob.Id)
+		t.taskKeyMap.Remove(oneJob.Id)
 		return false, err
 	}
+	t.signalWakeLocked()
 
 	return true, nil
 }
@@ -156,40 +234,73 @@ func (t *TaskQueue) update(oneJob task_queue2.OneJob) (bool, error) {
 	if t.isExist(oneJob.Id) == false {
 		return false, nil
 	}
-	// 自动更新时间
-	oneJob.UpdateTime = (emby.Time)(time.Now())
+	priorityValue, found := t.taskKeyMap.Get(oneJob.Id)
+	if !found {
+		return false, nil
+	}
+	oldPriority := priorityValue.(int)
+	storedValue, found := t.taskPriorityMapList[oldPriority].Get(oneJob.Id)
+	if !found {
+		return false, nil
+	}
+	original := storedValue.(task_queue2.OneJob)
+	oldSeriesRoot := original.SeriesRootDirPath
 
-	// 这里需要判断是否有优先级的 Update，如果有就需要把之前缓存的表给更新
-	// 然后再插入到新的表中
-	taskPriorityIndex, _ := t.taskKeyMap.Get(oneJob.Id)
-	storedValue, stored := t.taskPriorityMapList[taskPriorityIndex.(int)].Get(oneJob.Id)
-	oldSeriesRoot := ""
-	if stored {
-		oldSeriesRoot = storedValue.(task_queue2.OneJob).SeriesRootDirPath
-	}
-	// 检查权限范围
+	// Stage the full in-memory move, then persist the destination snapshot
+	// before deleting the durable source. A crash can therefore leave a
+	// duplicate (repaired by startup dedup), never a missing job.
+	oneJob.UpdateTime = emby.Time(time.Now())
+	oneJob.ClaimToken = 0
+	oneJob.StateRevision = nextStateRevision(original.StateRevision)
+	t.removeScheduledLocked(oneJob.Id)
 	oneJob = t.checkPriority(oneJob)
-	if oneJob.TaskPriority != taskPriorityIndex {
-		// 优先级修改
-		// 先删除原有的优先级
-		t.taskPriorityMapList[taskPriorityIndex.(int)].Remove(oneJob.Id)
-		err := t.save(taskPriorityIndex.(int))
-		if err != nil {
-			return false, err
-		}
+	newPriority := oneJob.TaskPriority
+	if newPriority != oldPriority {
+		t.taskPriorityMapList[oldPriority].Remove(oneJob.Id)
 	}
-	// 插入到统一的 KeyMap
-	t.taskKeyMap.Put(oneJob.Id, oneJob.TaskPriority)
-	// 分配到具体的优先级 map 中
-	t.taskPriorityMapList[oneJob.TaskPriority].Put(oneJob.Id, oneJob)
+	t.taskKeyMap.Put(oneJob.Id, newPriority)
+	t.taskPriorityMapList[newPriority].Put(oneJob.Id, oneJob)
 	if oldSeriesRoot != oneJob.SeriesRootDirPath {
 		t.removeJobFromSeriesIndex(oldSeriesRoot, oneJob.Id)
 		t.addJobToSeriesIndex(oneJob.SeriesRootDirPath, oneJob.Id)
 	}
-	err := t.save(oneJob.TaskPriority)
-	if err != nil {
+
+	rollback := func() {
+		t.removeScheduledLocked(oneJob.Id)
+		if newPriority != oldPriority {
+			t.taskPriorityMapList[newPriority].Remove(oneJob.Id)
+		}
+		t.taskPriorityMapList[oldPriority].Put(original.Id, original)
+		t.taskKeyMap.Put(original.Id, oldPriority)
+		if oldSeriesRoot != oneJob.SeriesRootDirPath {
+			t.removeJobFromSeriesIndex(oneJob.SeriesRootDirPath, oneJob.Id)
+			t.addJobToSeriesIndex(oldSeriesRoot, original.Id)
+		}
+		t.upsertScheduledLocked(original)
+	}
+	if err := t.save(newPriority); err != nil {
+		rollback()
 		return false, err
 	}
+
+	// Only a durably accepted update may cancel an active worker claim. Its
+	// later outcome carries the old generation and will be ignored.
+	if _, claimed := t.claimedJobs[oneJob.Id]; claimed {
+		t.detachClaimMemberLocked(oneJob.Id)
+	}
+	t.upsertScheduledLocked(oneJob)
+	if newPriority != oldPriority {
+		if err := t.save(oldPriority); err != nil {
+			// Destination is already durable. Keep the new in-memory state; the
+			// remaining durable duplicate is safe and startup dedup will remove it.
+			// Track the stale source explicitly so a live process can repair it
+			// through FlushDirtyPriorities or the next batched mutation.
+			t.dirtyPriorities[oldPriority] = struct{}{}
+			t.signalWakeLocked()
+			return true, err
+		}
+	}
+	t.signalWakeLocked()
 
 	return true, nil
 }
@@ -227,120 +338,47 @@ func (t *TaskQueue) Update(oneJob task_queue2.OneJob) (bool, error) {
 }
 
 // AutoDetectUpdateJobStatus 根据任务的生命周期图，进行自动判断更新，见《任务的生命周期》流程图
-func (t *TaskQueue) AutoDetectUpdateJobStatus(oneJob task_queue2.OneJob, inErr error) {
-
-	defer t.queueLock.Unlock()
-	t.queueLock.Lock()
-
-	previousStatus := oneJob.JobStatus
-	previousPriority := oneJob.TaskPriority
-	now := time.Now()
-
-	// 检查权限范围
-	oneJob = t.checkPriority(oneJob)
-
-	if inErr == nil {
-		// 如果任务的优先级是 0，那么这个任务就认为是一次性任务，下载完毕后设置为 ignore。
-		if oneJob.TaskPriority == 0 {
-			oneJob.JobStatus = task_queue2.Ignore
-		} else {
-			oneJob.JobStatus = task_queue2.Done
-		}
-		oneJob.TaskPriority = DefaultTaskPriorityLevel
-		oneJob.DownloadTimes += 1
-		oneJob.RetryTimes = 0
-		oneJob.ErrorInfo = ""
-		clearRetrySchedule(&oneJob)
-	} else {
-		oneJob.ErrorInfo = inErr.Error()
-		oneJob.DownloadTimes += 1
-		oneJob.RetryTimes += 1
-		oneJob.ForceRun = false
-
-		// 超过了时间限制，默认是 90 天, A.Before(B) : A < B == true
-		if retryLifetimeExpired(oneJob, now, settings.Get().AdvancedSettings.TaskQueue.ExpirationTime) {
-			// 超过 90 天了
-			oneJob.JobStatus = task_queue2.Failed
-			clearRetrySchedule(&oneJob)
-		} else {
-			// 还在 90 天内。默认任务首次失败后进入重试等级；之后每达到
-			// MaxRetryTimes 才再降低一级。RetryTimes 必须真实递增。
-			if oneJob.TaskPriority == DefaultTaskPriorityLevel && oneJob.RetryTimes == 1 {
-				// 需要重置到 L6
-				oneJob.TaskPriority = FirstRetryTaskPriorityLevel
-			} else if oneJob.RetryTimes >= settings.Get().AdvancedSettings.TaskQueue.MaxRetryTimes {
-				// 达到重试次数会进行一次降级，然后重置这个次数
-				oneJob.RetryTimes = 0
-				oneJob = t.degrade(oneJob)
-			}
-
-			// 强制为 waiting
-			oneJob.JobStatus = task_queue2.Waiting
-			scheduleRetry(&oneJob, now)
-		}
-
-		// 如果任务的优先级是 0，那么这个任务就认为是一次性任务，下载完毕不管如何都会设置为 ignore
-		if oneJob.TaskPriority == 0 {
-			oneJob.JobStatus = task_queue2.Ignore
-			clearRetrySchedule(&oneJob)
-		}
-	}
-
-	// 只要是进入完成标记流程的任务，如果优先级还是很高，那么就需要重置到默认优先级上
-	if oneJob.TaskPriority < DefaultTaskPriorityLevel {
-		oneJob.TaskPriority = DefaultTaskPriorityLevel
-	}
-	t.log.Infof("TaskQueue transition id=%s status=%d->%d priority=%d->%d attempts=%d retry=%d next=%s error=%q",
-		oneJob.Id, previousStatus, oneJob.JobStatus, previousPriority, oneJob.TaskPriority,
-		oneJob.DownloadTimes, oneJob.RetryTimes, time.Time(oneJob.NextAttemptTime).Format(time.RFC3339), oneJob.ErrorInfo)
-	// 这里不要用错了，要用无锁的，不然会阻塞
-	bok, err := t.update(oneJob)
-	if err != nil {
+func (t *TaskQueue) AutoDetectUpdateJobStatus(oneJob task_queue2.OneJob, inErr error) error {
+	if err := t.ApplyOutcomesReliable([]JobOutcome{{Job: oneJob, Err: inErr}}); err != nil {
 		t.log.Errorln("AutoDetectUpdateJobStatus", oneJob.VideoFPath, err)
-		return
+		return err
 	}
-	if bok == false {
-		t.log.Warningln("AutoDetectUpdateJobStatus ==", oneJob.VideoFPath, "Job.ID", oneJob.Id, "Not Found")
-		return
-	}
-	outcome := "SUCCESS"
-	if inErr != nil {
-		outcome = string(ClassifyErrorInfo(inErr.Error()))
-	}
-	if err := t.center.TaskOutcomeAdd(now.Format("2006-01-02"), oneJob.VideoType.String(), outcome); err != nil {
-		t.log.Warningln("TaskOutcomeAdd", err)
-	}
+	return nil
 }
 
 func (t *TaskQueue) del(jobId string) (bool, error) {
-	if t.isExist(jobId) == false {
+	original, found := t.jobByIDLocked(jobId)
+	if !found {
 		return false, nil
 	}
-
-	taskPriority, bok := t.taskKeyMap.Get(jobId)
-	if bok == false {
+	originalClaimedJobs := cloneStringMap(t.claimedJobs)
+	originalClaimMembers := cloneStringSliceMap(t.claimMembers)
+	originalClaimTokens := cloneUint64Map(t.claimTokens)
+	originalClaimOriginals := cloneJobMap(t.claimOriginals)
+	originalClaimPolicies := cloneStringMap(t.claimPolicies)
+	originalDirtyPriorities := clonePrioritySet(t.dirtyPriorities)
+	taskPriority, removed := t.removeJobWithoutSaveLocked(jobId)
+	if !removed {
 		return false, nil
 	}
-	// 删除连续剧的 tree.Map 里面的 tree.Set 的元素
-	needDelJobObj, bok := t.taskPriorityMapList[taskPriority.(int)].Get(jobId)
-	if bok == false {
-		return false, nil
-	}
-	needDelJob := needDelJobObj.(task_queue2.OneJob)
-	jobSetsObj, bok := t.taskGroupBySeries.Get(needDelJob.SeriesRootDirPath)
-	if bok == false {
-		return false, nil
-	}
-	jobSets := jobSetsObj.(*treeset.Set)
-	jobSets.Remove(jobId)
-	// 删除任务
-	t.taskKeyMap.Remove(jobId)
-	t.taskPriorityMapList[taskPriority.(int)].Remove(jobId)
-
-	err := t.save(taskPriority.(int))
+	err := t.save(taskPriority)
 	if err != nil {
+		// No snapshot was accepted, so restore the complete in-memory deletion,
+		// including a possible active series claim and all derived indexes.
+		t.taskKeyMap.Put(original.Id, original.TaskPriority)
+		t.taskPriorityMapList[original.TaskPriority].Put(original.Id, original)
+		t.addJobToSeriesIndex(original.SeriesRootDirPath, original.Id)
+		t.claimedJobs = originalClaimedJobs
+		t.claimMembers = originalClaimMembers
+		t.claimTokens = originalClaimTokens
+		t.claimOriginals = originalClaimOriginals
+		t.claimPolicies = originalClaimPolicies
+		t.dirtyPriorities = originalDirtyPriorities
+		t.rebuildScheduleIndexesLocked()
+		t.signalWakeLocked()
 		return false, err
 	}
+	t.signalWakeLocked()
 	// 删除任务的时候也需要删除对应的日志
 	pathRoot := filepath.Join(pkg.ConfigRootDirFPath(), "Logs")
 	fileFPath := filepath.Join(pathRoot, common.OnceLogPrefix+jobId+".log")
@@ -429,9 +467,7 @@ func (t *TaskQueue) deduplicateLoadedJobs() {
 		t.taskPriorityMapList[priority].Each(func(key interface{}, value interface{}) {
 			job := value.(task_queue2.OneJob)
 			current, found := canonical[job.Id]
-			if !found || time.Time(job.UpdateTime).After(time.Time(current.job.UpdateTime)) ||
-				(time.Time(job.UpdateTime).Equal(time.Time(current.job.UpdateTime)) &&
-					job.TaskPriority == priority && current.job.TaskPriority != current.priority) {
+			if !found || preferLoadedJobCandidate(loadedJobCandidate{priority: priority, job: job}, current) {
 				canonical[job.Id] = loadedJobCandidate{priority: priority, job: job}
 			}
 		})
@@ -461,7 +497,23 @@ func (t *TaskQueue) deduplicateLoadedJobs() {
 	}
 }
 
+func preferLoadedJobCandidate(candidate, current loadedJobCandidate) bool {
+	if candidate.job.StateRevision != current.job.StateRevision {
+		return candidate.job.StateRevision > current.job.StateRevision
+	}
+	if time.Time(candidate.job.UpdateTime).After(time.Time(current.job.UpdateTime)) {
+		return true
+	}
+	return time.Time(candidate.job.UpdateTime).Equal(time.Time(current.job.UpdateTime)) &&
+		candidate.job.TaskPriority == candidate.priority && current.job.TaskPriority != current.priority
+}
+
 func (t *TaskQueue) afterRead() {
+	// Establish a baseline for records written before search fingerprints
+	// existed. This deliberately runs before retry migration/index rebuild so
+	// an upgrade does not wake every historical conclusive miss at once.
+	t.migrateLegacySearchEvidence()
+
 	interruptedJobs := make([]task_queue2.OneJob, 0)
 	bdmvStreamJobs := make([]task_queue2.OneJob, 0)
 	legacyRetryJobs := make([]task_queue2.OneJob, 0)
@@ -490,6 +542,7 @@ func (t *TaskQueue) afterRead() {
 		oneJob.ErrorInfo = "ignored BDMV stream segment"
 		clearRetrySchedule(&oneJob)
 		oneJob.UpdateTime = emby.Time(time.Now())
+		oneJob.StateRevision = nextStateRevision(oneJob.StateRevision)
 		priorityValue, found := t.taskKeyMap.Get(oneJob.Id)
 		if !found {
 			t.log.Errorln("afterRead ignore BDMV stream missing job index", oneJob.VideoFPath)
@@ -518,6 +571,7 @@ func (t *TaskQueue) afterRead() {
 			continue
 		}
 		oneJob.NextAttemptTime = emby.Time(readyAt)
+		oneJob.StateRevision = nextStateRevision(oneJob.StateRevision)
 		priorityValue, found := t.taskKeyMap.Get(oneJob.Id)
 		if !found {
 			t.log.Errorln("afterRead migrate retry schedule missing job index", oneJob.VideoFPath)
@@ -536,8 +590,34 @@ func (t *TaskQueue) afterRead() {
 		t.log.Infof("TaskQueue startup migration persisted %d legacy retry schedules", len(legacyRetryJobs))
 	}
 
+	// A persisted Downloading state proves only that the process stopped before
+	// a terminal queue commit. It does not prove a supplier attempt happened.
+	// Recover without changing attempts, priority, error or search evidence, and
+	// use an independent short delay to avoid a restart hot loop.
+	changedPriorities = make(map[int]struct{})
+	recoveryNotBefore := time.Now().Add(time.Minute)
 	for _, oneJob := range interruptedJobs {
-		t.AutoDetectUpdateJobStatus(oneJob, errors.New("download interrupted by process restart"))
+		oneJob.JobStatus = task_queue2.Waiting
+		oneJob.ForceRun = false
+		oneJob.ClaimToken = 0
+		oneJob.NotBeforeTime = emby.Time(recoveryNotBefore)
+		oneJob.StateRevision = nextStateRevision(oneJob.StateRevision)
+		priorityValue, found := t.taskKeyMap.Get(oneJob.Id)
+		if !found {
+			t.log.Errorln("afterRead recover interrupted job missing index", oneJob.Id)
+			continue
+		}
+		priority := priorityValue.(int)
+		t.taskPriorityMapList[priority].Put(oneJob.Id, oneJob)
+		changedPriorities[priority] = struct{}{}
+	}
+	for priority := range changedPriorities {
+		if err := t.save(priority); err != nil {
+			t.log.Errorln("afterRead persist interrupted job recovery failed", priority, err)
+		}
+	}
+	if len(interruptedJobs) > 0 {
+		t.log.Infof("TaskQueue recovered %d interrupted jobs without counting supplier failures", len(interruptedJobs))
 	}
 }
 
@@ -549,10 +629,12 @@ func (t *TaskQueue) save(taskPriority int) error {
 		return err
 	}
 
-	err = t.center.TaskQueueSave(taskPriority, b)
+	err = t.persistPriority(taskPriority, b)
 	if err != nil {
 		return err
 	}
+	delete(t.dirtyPriorities, taskPriority)
+	t.runtimeStats.PersistenceWrites++
 
 	return nil
 }

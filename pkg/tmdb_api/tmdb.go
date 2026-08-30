@@ -1,8 +1,12 @@
 package tmdb_api
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 
@@ -18,22 +22,77 @@ type TmdbApi struct {
 	tmdbClient *tmdb.Client
 }
 
+const (
+	defaultTMDBAPIHost   = "api.themoviedb.org"
+	alternateTMDBAPIHost = "api.tmdb.org"
+)
+
+type alternateTMDBTransport struct {
+	base http.RoundTripper
+}
+
+func (t alternateTMDBTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	cloned := request.Clone(request.Context())
+	cloned.URL = cloneURL(request.URL)
+	if strings.EqualFold(cloned.URL.Hostname(), defaultTMDBAPIHost) {
+		cloned.URL.Host = alternateTMDBAPIHost
+	}
+	return t.base.RoundTrip(cloned)
+}
+
+func cloneURL(source *url.URL) *url.URL {
+	if source == nil {
+		return &url.URL{}
+	}
+	cloned := *source
+	return &cloned
+}
+
+func isolatedTMDBHTTPClient(client *http.Client, useAlternateBaseURL bool) http.Client {
+	if client == nil {
+		client = &http.Client{}
+	}
+	isolated := *client
+	if useAlternateBaseURL {
+		base := client.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		isolated.Transport = alternateTMDBTransport{base: base}
+	}
+	return isolated
+}
+
 func NewTmdbHelper(l *logrus.Logger, apiKey string, useAlternateBaseURL bool) (*TmdbApi, error) {
+	return NewTmdbHelperWithHTTPClient(l, apiKey, useAlternateBaseURL, nil)
+}
+
+// NewTmdbHelperWithHTTPClient creates a TMDB helper with an optional isolated
+// transport. It is used by settings connectivity checks so they never need to
+// rewrite the process-wide proxy configuration.
+func NewTmdbHelperWithHTTPClient(l *logrus.Logger, apiKey string, useAlternateBaseURL bool, httpClient *http.Client) (*TmdbApi, error) {
 
 	tmdbClient, err := tmdb.Init(apiKey)
 	if err != nil {
 		err = fmt.Errorf("error initializing tmdb client: %s", err)
 		return nil, err
 	}
-	if useAlternateBaseURL == true {
-		tmdbClient.SetAlternateBaseURL()
-	}
 	t := TmdbApi{
 		l:          l,
 		apiKey:     apiKey,
 		tmdbClient: tmdbClient,
 	}
-	t.setClientConfig()
+	if httpClient != nil {
+		t.tmdbClient.SetClientConfig(isolatedTMDBHTTPClient(httpClient, useAlternateBaseURL))
+	} else if err = t.setClientConfig(useAlternateBaseURL); err != nil {
+		return nil, err
+	}
+	if httpClient == nil {
+		// Preserve normal runtime retry behavior. Connectivity checks use an
+		// injected request-bound client and must return promptly on 429 instead of
+		// sleeping outside the request context in the upstream library.
+		t.tmdbClient.SetClientAutoRetry()
+	}
 	return &t, nil
 }
 
@@ -43,7 +102,7 @@ func (t *TmdbApi) Alive() bool {
 	options["language"] = "en-US"
 	searchMulti, err := t.tmdbClient.GetSearchMulti("Dexter", options)
 	if err != nil {
-		t.l.Errorln("GetSearchMulti", err)
+		t.l.Errorln("GetSearchMulti", t.redactError(err))
 		return false
 	}
 	t.l.Infoln("Tmdb Api is Alive", searchMulti.TotalResults)
@@ -65,7 +124,7 @@ func (t *TmdbApi) GetInfo(iD string, idType string, isMovieOrSeries, isQueryEnOr
 		options["external_source"] = "imdb_id"
 		outFindByID, err = t.tmdbClient.GetFindByID(iD, options)
 		if err != nil {
-			return nil, fmt.Errorf("error getting tmdb info by id = %s: %s", iD, err)
+			return nil, fmt.Errorf("error getting tmdb info by id = %s: %w", iD, t.redactError(err))
 		}
 	} else if idType == TmdbID {
 
@@ -77,7 +136,7 @@ func (t *TmdbApi) GetInfo(iD string, idType string, isMovieOrSeries, isQueryEnOr
 		if isMovieOrSeries == true {
 			movieDetails, err := t.tmdbClient.GetMovieDetails(intVar, options)
 			if err != nil {
-				return nil, fmt.Errorf("error getting tmdb movie details by id = %s: %s", iD, err)
+				return nil, fmt.Errorf("error getting tmdb movie details by id = %s: %w", iD, t.redactError(err))
 			}
 			outFindByID = &tmdb.FindByID{
 				MovieResults: []struct {
@@ -116,7 +175,7 @@ func (t *TmdbApi) GetInfo(iD string, idType string, isMovieOrSeries, isQueryEnOr
 		} else {
 			tvDetails, err := t.tmdbClient.GetTVDetails(intVar, options)
 			if err != nil {
-				return nil, fmt.Errorf("error getting tmdb tv details by id = %s: %s", iD, err)
+				return nil, fmt.Errorf("error getting tmdb tv details by id = %s: %w", iD, t.redactError(err))
 			}
 			outFindByID = &tmdb.FindByID{
 				TvResults: []struct {
@@ -172,7 +231,7 @@ func (t *TmdbApi) ConvertId(iD string, idType string, isMovieOrSeries bool) (con
 		if isMovieOrSeries == true {
 			movieExternalIDs, err := t.tmdbClient.GetMovieExternalIDs(intVar, options)
 			if err != nil {
-				return nil, err
+				return nil, t.redactError(err)
 			}
 			convertIdResult = &ConvertIdResult{
 				ImdbID: movieExternalIDs.IMDbID,
@@ -183,7 +242,7 @@ func (t *TmdbApi) ConvertId(iD string, idType string, isMovieOrSeries bool) (con
 		} else {
 			tvExternalIDs, err := t.tmdbClient.GetTVExternalIDs(intVar, options)
 			if err != nil {
-				return nil, err
+				return nil, t.redactError(err)
 			}
 
 			convertIdResult = &ConvertIdResult{
@@ -199,15 +258,27 @@ func (t *TmdbApi) ConvertId(iD string, idType string, isMovieOrSeries bool) (con
 	}
 }
 
-func (t *TmdbApi) setClientConfig() {
+func (t *TmdbApi) setClientConfig(useAlternateBaseURL bool) error {
 	// 获取 http client 实例
 	restyClient, err := pkg.NewHttpClient()
 	if err != nil {
-		err = fmt.Errorf("error initializing resty client: %s", err)
-		return
+		return fmt.Errorf("error initializing resty client: %s", err)
 	}
-	t.tmdbClient.SetClientConfig(*restyClient.GetClient())
-	t.tmdbClient.SetClientAutoRetry()
+	t.tmdbClient.SetClientConfig(isolatedTMDBHTTPClient(restyClient.GetClient(), useAlternateBaseURL))
+	return nil
+}
+
+func (t *TmdbApi) redactError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	for _, secret := range []string{t.apiKey, url.QueryEscape(t.apiKey)} {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
+	}
+	return errors.New(message)
 }
 
 const (

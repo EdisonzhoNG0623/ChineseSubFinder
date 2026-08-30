@@ -56,7 +56,9 @@ func (d *Downloader) backfillSeriesCollection(ctx context.Context, job taskQueue
 		}
 
 		episodeKey := pkg.GetEpisodeKeyName(episodeInfo.Season, episodeInfo.Episode)
-		if err = d.oneVideoSelectBestSub(episodeInfo.FileFullPath, organizeSubFiles[episodeKey]); err != nil {
+		if err = d.oneVideoSelectBestSubForCohort(
+			episodeInfo.FileFullPath, organizeSubFiles[episodeKey], supplierMetricsCohort(job.VideoType),
+		); err != nil {
 			lastErr = err
 			d.log.Warningf("Collection cache fan-out failed: series=%q episode=%s error=%v", filepath.Base(job.SeriesRootDirPath), episodeKey, err)
 			continue

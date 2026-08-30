@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,8 +19,18 @@ type Query func(ifaces.ISupplier) ([]supplier.SubInfo, error)
 type ContextQuery func(context.Context, ifaces.ISupplier) ([]supplier.SubInfo, error)
 type FastEnough func([]supplier.SubInfo) bool
 
+type retryAtSupplier interface {
+	RetryAtTime() time.Time
+}
+
 var searchSequence atomic.Uint64
 var providerLimiters sync.Map
+
+var sharedResourceUses = struct {
+	sync.Mutex
+	active int
+	idle   chan struct{}
+}{idle: closedResourceIdleSignal()}
 
 const slowHedgeDelay = 8 * time.Second
 
@@ -33,7 +42,28 @@ func NewSearchID(prefix string) string {
 // queried when the fast tier did not produce a strong deterministic match.
 // Legacy supplier interfaces are intentionally kept unchanged.
 func Run(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string, fastEnough FastEnough, query Query) ([]supplier.SubInfo, error) {
-	return RunContext(ctx, logger, suppliers, searchID, fastEnough, func(_ context.Context, source ifaces.ISupplier) ([]supplier.SubInfo, error) {
+	report := RunWithReport(ctx, logger, suppliers, searchID, fastEnough, query)
+	return report.Items, report.ContextErr
+}
+
+// RunForCohort is the media-aware additive form of Run. Existing callers keep
+// global routing behavior while new callers can isolate movie/series/anime
+// observations.
+func RunForCohort(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string,
+	cohort subtitle_metrics.MediaCohort, fastEnough FastEnough, query Query) ([]supplier.SubInfo, error) {
+	report := RunWithReportForCohort(ctx, logger, suppliers, searchID, cohort, fastEnough, query)
+	return report.Items, report.ContextErr
+}
+
+// RunWithReport is the structured counterpart of Run for legacy suppliers.
+func RunWithReport(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string, fastEnough FastEnough, query Query) SearchReport {
+	return RunWithReportForCohort(ctx, logger, suppliers, searchID, subtitle_metrics.CohortUnknown, fastEnough, query)
+}
+
+// RunWithReportForCohort is the media-aware additive form of RunWithReport.
+func RunWithReportForCohort(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string,
+	cohort subtitle_metrics.MediaCohort, fastEnough FastEnough, query Query) SearchReport {
+	return RunContextWithReportForCohort(ctx, logger, suppliers, searchID, cohort, fastEnough, func(_ context.Context, source ifaces.ISupplier) ([]supplier.SubInfo, error) {
 		return query(source)
 	})
 }
@@ -42,53 +72,94 @@ func Run(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplie
 // queried together, while slow suppliers are hedged in observed-value order
 // and canceled as soon as a strong deterministic match is available.
 func RunContext(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string, fastEnough FastEnough, query ContextQuery) ([]supplier.SubInfo, error) {
+	report := RunContextWithReport(ctx, logger, suppliers, searchID, fastEnough, query)
+	return report.Items, report.ContextErr
+}
+
+// RunContextForCohort is the media-aware additive form of RunContext.
+func RunContextForCohort(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string,
+	cohort subtitle_metrics.MediaCohort, fastEnough FastEnough, query ContextQuery) ([]supplier.SubInfo, error) {
+	report := RunContextWithReportForCohort(ctx, logger, suppliers, searchID, cohort, fastEnough, query)
+	return report.Items, report.ContextErr
+}
+
+// RunContextWithReport preserves every terminal provider outcome so callers
+// can distinguish a healthy empty search from provider unavailability. It is
+// additive to RunContext, whose historical return semantics remain unchanged.
+func RunContextWithReport(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string, fastEnough FastEnough, query ContextQuery) SearchReport {
+	return RunContextWithReportForCohort(ctx, logger, suppliers, searchID, subtitle_metrics.CohortUnknown, fastEnough, query)
+}
+
+// RunContextWithReportForCohort adds bounded media-aware routing without
+// changing the SearchReport or legacy RunContext contracts.
+func RunContextWithReportForCohort(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string,
+	cohort subtitle_metrics.MediaCohort, fastEnough FastEnough, query ContextQuery) SearchReport {
+	cohort = subtitle_metrics.NormalizeCohort(cohort)
 	fast, slow := splitSuppliers(suppliers)
-	results := runTier(ctx, logger, fast, searchID, "fast", query)
+	fastResult := runTier(ctx, logger, fast, searchID, "fast", cohort, query)
+	report := SearchReport{Items: fastResult.items, Providers: fastResult.providers}
 	if err := ctx.Err(); err != nil {
-		return results, err
+		report.ContextErr = err
+		report.Degraded = true
+		return report
 	}
-	if fastEnough != nil && fastEnough(results) {
+	if fastEnough != nil && fastEnough(report.Items) {
 		logger.WithFields(logrus.Fields{
 			"event": "supplier_tier_complete", "search_id": searchID, "phase": "fast",
-			"candidate_count": len(results), "outcome": "strong_match",
+			"candidate_count": len(report.Items), "outcome": "strong_match",
 		}).Info("slow supplier tier skipped")
-		return results, nil
+		report.Degraded = reportsDegraded(report.Providers)
+		return report
 	}
 
-	results = append(results, runProgressiveTier(ctx, logger, slow, searchID, results, fastEnough, query)...)
-	return results, ctx.Err()
+	slowResult := runProgressiveTier(ctx, logger, slow, searchID, cohort, report.Items, fastEnough, query)
+	report.Items = append(report.Items, slowResult.items...)
+	report.Providers = append(report.Providers, slowResult.providers...)
+	report.ContextErr = ctx.Err()
+	report.Degraded = report.ContextErr != nil || reportsDegraded(report.Providers)
+	return report
 }
 
 type supplierOutcome struct {
 	provider string
 	items    []supplier.SubInfo
+	report   ProviderReport
 }
 
-func runTier(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID, phase string, query ContextQuery) []supplier.SubInfo {
+type tierResult struct {
+	items     []supplier.SubInfo
+	providers []ProviderReport
+}
+
+func runTier(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID, phase string,
+	cohort subtitle_metrics.MediaCohort, query ContextQuery) tierResult {
 	if len(suppliers) == 0 {
-		return nil
+		return tierResult{}
 	}
 	outcomes := make(chan supplierOutcome, len(suppliers))
 	for _, source := range suppliers {
-		go runSupplier(ctx, logger, source, searchID, phase, query, outcomes)
+		go runSupplier(ctx, logger, source, searchID, phase, cohort, query, outcomes)
 	}
 
-	all := make([]supplier.SubInfo, 0)
+	result := tierResult{items: make([]supplier.SubInfo, 0), providers: make([]ProviderReport, 0, len(suppliers))}
 	for range suppliers {
-		result := <-outcomes
-		all = append(all, result.items...)
+		outcome := <-outcomes
+		result.items = append(result.items, outcome.items...)
+		result.providers = append(result.providers, outcome.report)
 	}
-	return all
+	return result
 }
 
-func runProgressiveTier(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string, existing []supplier.SubInfo, fastEnough FastEnough, query ContextQuery) []supplier.SubInfo {
+func runProgressiveTier(ctx context.Context, logger *logrus.Logger, suppliers []ifaces.ISupplier, searchID string,
+	cohort subtitle_metrics.MediaCohort, existing []supplier.SubInfo, fastEnough FastEnough, query ContextQuery) tierResult {
 	if len(suppliers) == 0 {
-		return nil
+		return tierResult{}
 	}
-	suppliers = append([]ifaces.ISupplier(nil), suppliers...)
-	sort.SliceStable(suppliers, func(i, j int) bool {
-		return slowSupplierRank(suppliers[i].GetSupplierName()) < slowSupplierRank(suppliers[j].GetSupplierName())
-	})
+	suppliers, routingBasis := orderSlowSuppliers(suppliers, cohort)
+	logger.WithFields(logrus.Fields{
+		"event": "supplier_route_order", "search_id": searchID, "phase": "slow",
+		"cohort": cohort.Label(), "routing_basis": routingBasis, "provider_order": supplierNames(suppliers),
+	}).Info("slow supplier route selected")
 	tierCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	outcomes := make(chan supplierOutcome, len(suppliers))
@@ -96,26 +167,27 @@ func runProgressiveTier(ctx context.Context, logger *logrus.Logger, suppliers []
 	startNext := func() {
 		source := suppliers[next]
 		next++
-		go runSupplier(tierCtx, logger, source, searchID, "slow", query, outcomes)
+		go runSupplier(tierCtx, logger, source, searchID, "slow", cohort, query, outcomes)
 	}
 	startNext()
 	timer := time.NewTimer(slowHedgeDelay)
 	defer timer.Stop()
 	all := append([]supplier.SubInfo(nil), existing...)
-	slowResults := make([]supplier.SubInfo, 0)
+	result := tierResult{items: make([]supplier.SubInfo, 0), providers: make([]ProviderReport, 0, len(suppliers))}
 	for completed < len(suppliers) {
 		select {
-		case result := <-outcomes:
+		case outcome := <-outcomes:
 			completed++
-			all = append(all, result.items...)
-			slowResults = append(slowResults, result.items...)
+			all = append(all, outcome.items...)
+			result.items = append(result.items, outcome.items...)
+			result.providers = append(result.providers, outcome.report)
 			if fastEnough != nil && fastEnough(all) {
-				subtitle_metrics.RecordEarlyStop(result.provider)
+				subtitle_metrics.RecordEarlyStopForCohort(outcome.provider, cohort)
 				logger.WithFields(logrus.Fields{
 					"event": "supplier_tier_complete", "search_id": searchID, "phase": "slow",
-					"provider": result.provider, "candidate_count": len(all), "outcome": "strong_match",
+					"provider": outcome.provider, "candidate_count": len(all), "outcome": "strong_match",
 				}).Info("remaining slow suppliers canceled")
-				return slowResults
+				return result
 			}
 			if next < len(suppliers) && completed == next {
 				startNext()
@@ -127,41 +199,98 @@ func runProgressiveTier(ctx context.Context, logger *logrus.Logger, suppliers []
 				resetTimer(timer, slowHedgeDelay)
 			}
 		case <-ctx.Done():
-			return slowResults
+			return result
 		}
 	}
-	return slowResults
+	return result
 }
 
-func runSupplier(ctx context.Context, logger *logrus.Logger, source ifaces.ISupplier, searchID, phase string, query ContextQuery, outcomes chan<- supplierOutcome) {
+func runSupplier(ctx context.Context, logger *logrus.Logger, source ifaces.ISupplier, searchID, phase string,
+	cohort subtitle_metrics.MediaCohort, query ContextQuery, outcomes chan<- supplierOutcome) {
+	runSupplierWithBudget(ctx, logger, source, searchID, phase, cohort, query, outcomes, timeoutFor(source.GetSupplierName(), phase))
+}
+
+func runSupplierWithBudget(ctx context.Context, logger *logrus.Logger, source ifaces.ISupplier, searchID, phase string,
+	cohort subtitle_metrics.MediaCohort, query ContextQuery, outcomes chan<- supplierOutcome, budget time.Duration) {
 	name := source.GetSupplierName()
-	fields := logrus.Fields{"event": "supplier_search", "provider": name, "phase": phase, "search_id": searchID}
+	fields := logrus.Fields{
+		"event": "supplier_search", "provider": name, "phase": phase,
+		"search_id": searchID, "cohort": cohort.Label(),
+	}
 	if allowed, until := subtitle_metrics.ShouldAttempt(name, time.Now()); !allowed {
 		subtitle_metrics.RecordCircuitSkip(name)
 		fields["outcome"] = "circuit_open"
 		fields["circuit_open_until"] = until.Format(time.RFC3339)
 		logger.WithFields(fields).Warn("supplier search skipped")
-		outcomes <- supplierOutcome{provider: name}
+		outcomes <- supplierOutcome{provider: name, report: ProviderReport{
+			Provider: name, Phase: phase, Outcome: ProviderOutcomeCircuitOpen,
+			Failure: FailureTransient, RetryAt: until,
+		}}
 		return
 	}
 
+	startedAt := time.Now()
+	budgetCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	limiter := providerLimiter(name)
 	select {
 	case limiter <- struct{}{}:
-	case <-ctx.Done():
-		outcomes <- supplierOutcome{provider: name}
+	case <-budgetCtx.Done():
+		duration := time.Since(startedAt)
+		fields["duration_ms"] = duration.Milliseconds()
+		fields["candidate_count"] = 0
+		report := ProviderReport{
+			Provider: name, Phase: phase, CandidateCount: 0, Duration: duration,
+			Failure: FailureTransient, Err: budgetCtx.Err(),
+		}
+		if ctx.Err() != nil {
+			report.Outcome = ProviderOutcomeCanceled
+			fields["outcome"] = "canceled"
+			logger.WithFields(fields).Info("supplier search canceled while waiting for provider capacity")
+		} else {
+			report.Outcome = ProviderOutcomeTimeout
+			fields["outcome"] = "timeout"
+			subtitle_metrics.RecordAttemptForCohort(name, cohort, duration, 0, budgetCtx.Err())
+			logger.WithFields(fields).Warn("supplier search timed out while waiting for provider capacity")
+		}
+		outcomes <- supplierOutcome{provider: name, report: report}
 		return
 	}
-	startedAt := time.Now()
-	budgetCtx, cancel := context.WithTimeout(ctx, timeoutFor(name, phase))
-	defer cancel()
 	type callOutcome struct {
 		items   []supplier.SubInfo
 		err     error
 		skipped bool
 	}
 	callResult := make(chan callOutcome, 1)
+	// Register before spawning the legacy call. A goroutine that has not been
+	// scheduled yet is still an active user of Chrome/tmp resources and must
+	// prevent cleanup from starting underneath it.
+	finishProviderCall := BeginSharedResourceUse()
+	if budgetCtx.Err() != nil {
+		finishProviderCall()
+		<-limiter
+		duration := time.Since(startedAt)
+		fields["duration_ms"] = duration.Milliseconds()
+		fields["candidate_count"] = 0
+		report := ProviderReport{
+			Provider: name, Phase: phase, CandidateCount: 0, Duration: duration,
+			Failure: FailureTransient, Err: budgetCtx.Err(),
+		}
+		if ctx.Err() != nil {
+			report.Outcome = ProviderOutcomeCanceled
+			fields["outcome"] = "canceled"
+			logger.WithFields(fields).Info("supplier search canceled before provider invocation")
+		} else {
+			report.Outcome = ProviderOutcomeTimeout
+			fields["outcome"] = "timeout"
+			subtitle_metrics.RecordAttemptForCohort(name, cohort, duration, 0, budgetCtx.Err())
+			logger.WithFields(fields).Warn("supplier search timed out before provider invocation")
+		}
+		outcomes <- supplierOutcome{provider: name, report: report}
+		return
+	}
 	go func() {
+		defer finishProviderCall()
 		defer func() { <-limiter }()
 		result := callOutcome{}
 		defer func() {
@@ -184,37 +313,120 @@ func runSupplier(ctx context.Context, logger *logrus.Logger, source ifaces.ISupp
 	case result = <-callResult:
 	case <-budgetCtx.Done():
 		result.err = budgetCtx.Err()
-		canceledByParent = ctx.Err() != nil
 	}
+	// Parent cancellation is authoritative even when a context-aware query and
+	// ctx.Done become ready together and select happens to receive callResult.
+	// Administrative stop and progressive early-stop must never degrade health
+	// metrics or open a provider circuit.
+	canceledByParent = ctx.Err() != nil
 	duration := time.Since(startedAt)
 	fields["duration_ms"] = duration.Milliseconds()
 	fields["candidate_count"] = len(result.items)
+	report := ProviderReport{
+		Provider: name, Phase: phase, CandidateCount: len(result.items), Duration: duration, Err: result.err,
+	}
 	switch {
 	case result.skipped:
+		report.Outcome = ProviderOutcomeDailyLimit
+		report.Failure = FailureQuota
+		if provider, ok := source.(retryAtSupplier); ok {
+			report.RetryAt = provider.RetryAtTime()
+		}
 		fields["outcome"] = "daily_limit"
 		logger.WithFields(fields).Info("supplier search skipped")
 	case canceledByParent:
+		report.Outcome = ProviderOutcomeCanceled
+		report.Failure = FailureTransient
 		fields["outcome"] = "canceled"
 		logger.WithFields(fields).Info("supplier search canceled")
 	case result.err != nil:
-		subtitle_metrics.RecordAttempt(name, duration, 0, result.err)
+		report.Failure, report.RetryAt = classifyFailure(result.err)
+		subtitle_metrics.RecordAttemptForCohort(name, cohort, duration, len(result.items), result.err)
 		if budgetCtx.Err() != nil {
+			report.Outcome = ProviderOutcomeTimeout
 			fields["outcome"] = "timeout"
 			logger.WithFields(fields).Warn("supplier search timed out")
 		} else {
+			report.Outcome = ProviderOutcomeError
 			fields["outcome"] = "error"
 			logger.WithFields(fields).Warn("supplier search failed")
 		}
 	case len(result.items) == 0:
-		subtitle_metrics.RecordAttempt(name, duration, 0, nil)
+		report.Outcome = ProviderOutcomeEmpty
+		subtitle_metrics.RecordAttemptForCohort(name, cohort, duration, 0, nil)
 		fields["outcome"] = "empty"
 		logger.WithFields(fields).Info("supplier search completed")
 	default:
-		subtitle_metrics.RecordAttempt(name, duration, len(result.items), nil)
+		report.Outcome = ProviderOutcomeHit
+		subtitle_metrics.RecordAttemptForCohort(name, cohort, duration, len(result.items), nil)
 		fields["outcome"] = "hit"
 		logger.WithFields(fields).Info("supplier search completed")
 	}
-	outcomes <- supplierOutcome{provider: name, items: result.items}
+	outcomes <- supplierOutcome{provider: name, items: result.items, report: report}
+}
+
+func closedResourceIdleSignal() chan struct{} {
+	idle := make(chan struct{})
+	close(idle)
+	return idle
+}
+
+// BeginSharedResourceUse registers work that may touch the process-wide
+// Chrome instance or root temporary directory. Registration happens before a
+// worker/query goroutine is spawned, closing the scheduling gap with cleanup.
+func BeginSharedResourceUse() func() {
+	sharedResourceUses.Lock()
+	if sharedResourceUses.active == 0 {
+		sharedResourceUses.idle = make(chan struct{})
+	}
+	sharedResourceUses.active++
+	sharedResourceUses.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			sharedResourceUses.Lock()
+			sharedResourceUses.active--
+			if sharedResourceUses.active == 0 {
+				close(sharedResourceUses.idle)
+			}
+			sharedResourceUses.Unlock()
+		})
+	}
+}
+
+// TryWithSharedResourcesIdle runs fn only when no registered worker, health
+// check or provider invocation can use Chrome/tmp. Registration and fn share
+// one boundary, so use cannot start between the idle check and cleanup.
+func TryWithSharedResourcesIdle(fn func()) bool {
+	sharedResourceUses.Lock()
+	defer sharedResourceUses.Unlock()
+	if sharedResourceUses.active != 0 {
+		return false
+	}
+	if fn != nil {
+		fn()
+	}
+	return true
+}
+
+// SharedResourcesIdleChan is a broadcast edge: every waiter on the current
+// generation wakes when its active-use count reaches zero. Callers must still
+// re-check with TryWithSharedResourcesIdle because a new generation may start.
+func SharedResourcesIdleChan() <-chan struct{} {
+	sharedResourceUses.Lock()
+	idle := sharedResourceUses.idle
+	sharedResourceUses.Unlock()
+	return idle
+}
+
+func reportsDegraded(reports []ProviderReport) bool {
+	for _, report := range reports {
+		if report.degraded() {
+			return true
+		}
+	}
+	return false
 }
 
 func resetTimer(timer *time.Timer, duration time.Duration) {

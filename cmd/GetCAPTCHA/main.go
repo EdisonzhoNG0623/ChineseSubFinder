@@ -159,7 +159,7 @@ func Process(proxySettings *settings.ProxySettings) error {
 	loggerBase.Infoln("PostUrl Resp StatusCode:", resp.StatusCode())
 
 	if codeReply.Status == 0 {
-		return fmt.Errorf("codeReply.Status == 0", "codeReply.Message:", codeReply.Message)
+		return fmt.Errorf("codeReply.Status == 0: codeReply.Message: %s", codeReply.Message)
 	}
 
 	loggerBase.Infoln("upload code to web api done")

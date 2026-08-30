@@ -10,12 +10,14 @@ import (
 type ErrorCategory string
 
 const (
-	ErrorCategoryNone       ErrorCategory = "NONE"
-	ErrorCategoryNoSubtitle ErrorCategory = "NO_SUBTITLE"
-	ErrorCategoryTransient  ErrorCategory = "TRANSIENT"
-	ErrorCategoryLocal      ErrorCategory = "LOCAL"
-	ErrorCategoryBlocked    ErrorCategory = "PROVIDER_BLOCKED"
-	ErrorCategoryUnknown    ErrorCategory = "UNKNOWN"
+	ErrorCategoryNone        ErrorCategory = "NONE"
+	ErrorCategoryNoSubtitle  ErrorCategory = "NO_SUBTITLE"
+	ErrorCategoryTransient   ErrorCategory = "TRANSIENT"
+	ErrorCategoryQuota       ErrorCategory = "QUOTA"
+	ErrorCategoryUnavailable ErrorCategory = "PROVIDER_UNAVAILABLE"
+	ErrorCategoryLocal       ErrorCategory = "LOCAL"
+	ErrorCategoryBlocked     ErrorCategory = "PROVIDER_BLOCKED"
+	ErrorCategoryUnknown     ErrorCategory = "UNKNOWN"
 )
 
 type RetryDiagnostic struct {
@@ -31,12 +33,13 @@ type RetryDiagnostic struct {
 // It deliberately does not expose raw paths or supplier response bodies.
 func DiagnoseRetry(job taskQueueTypes.OneJob, now time.Time) RetryDiagnostic {
 	next := nextAttemptAt(job)
+	hasAdministrativeDelay := !isUnsetRetryTime(time.Time(job.NotBeforeTime))
 	diagnostic := RetryDiagnostic{
 		Category:      ClassifyErrorInfo(job.ErrorInfo),
-		IsForced:      job.ForceRun,
+		IsForced:      job.ForceRun && !hasAdministrativeDelay,
 		NextAttemptAt: next,
 	}
-	if !next.IsZero() && job.JobStatus == taskQueueTypes.Waiting && !job.ForceRun {
+	if !next.IsZero() && job.JobStatus == taskQueueTypes.Waiting && (!job.ForceRun || hasAdministrativeDelay) {
 		diagnostic.IsScheduled = true
 		diagnostic.IsReady = !next.After(now)
 		if next.After(now) {
@@ -55,6 +58,12 @@ func ClassifyErrorInfo(message string) ErrorCategory {
 		strings.Contains(message, "cloudflare") || strings.Contains(message, "blocked") ||
 		strings.Contains(message, "forbidden") || strings.Contains(message, "status code 403") {
 		return ErrorCategoryBlocked
+	}
+	if isQuotaError(message) {
+		return ErrorCategoryQuota
+	}
+	if isProviderUnavailableError(message) {
+		return ErrorCategoryUnavailable
 	}
 	if isNoSubError(message) {
 		return ErrorCategoryNoSubtitle

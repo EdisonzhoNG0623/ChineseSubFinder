@@ -17,15 +17,17 @@ import (
 )
 
 type jobPageQuery struct {
-	Page          int
-	PageSize      int
-	Status        *int
-	VideoType     *int
-	Priority      string
-	ErrorCategory string
-	Search        string
-	SortBy        string
-	SortOrder     string
+	Page           int
+	PageSize       int
+	Status         *int
+	VideoType      *int
+	Priority       string
+	ErrorCategory  string
+	ActionableOnly bool
+	QueueState     string
+	Search         string
+	SortBy         string
+	SortOrder      string
 }
 
 func (cb *ControllerBase) JobsPageHandler(c *gin.Context) {
@@ -41,8 +43,8 @@ func (cb *ControllerBase) JobsPageHandler(c *gin.Context) {
 	}
 	now := time.Now()
 	summary := summarizeJobs(jobs, now)
-	filtered := filterJobs(jobs, query)
-	sortJobs(filtered, query.SortBy, query.SortOrder)
+	filtered := filterJobs(jobs, query, now)
+	sortJobs(filtered, query.SortBy, query.SortOrder, now)
 
 	totalItems := len(filtered)
 	totalPages := 0
@@ -109,6 +111,16 @@ func parseJobPageQuery(c *gin.Context) (jobPageQuery, error) {
 	if query.ErrorCategory != "" && !validErrorCategory(query.ErrorCategory) {
 		return query, newQueryError("errorCategory", "is invalid")
 	}
+	if raw := strings.TrimSpace(c.Query("actionableOnly")); raw != "" {
+		query.ActionableOnly, err = strconv.ParseBool(raw)
+		if err != nil {
+			return query, newQueryError("actionableOnly", "must be true or false")
+		}
+	}
+	query.QueueState = strings.ToLower(strings.TrimSpace(c.Query("queueState")))
+	if query.QueueState != "" && !validQueueState(query.QueueState) {
+		return query, newQueryError("queueState", "is invalid")
+	}
 	query.Search = strings.TrimSpace(c.Query("search"))
 	if len([]rune(query.Search)) > 200 {
 		return query, newQueryError("search", "must be at most 200 characters")
@@ -136,7 +148,17 @@ func newQueryError(field, message string) error { return queryError{field: field
 func validErrorCategory(value string) bool {
 	switch task_queue.ErrorCategory(value) {
 	case task_queue.ErrorCategoryNone, task_queue.ErrorCategoryNoSubtitle, task_queue.ErrorCategoryTransient,
-		task_queue.ErrorCategoryLocal, task_queue.ErrorCategoryBlocked, task_queue.ErrorCategoryUnknown:
+		task_queue.ErrorCategoryQuota, task_queue.ErrorCategoryUnavailable, task_queue.ErrorCategoryLocal,
+		task_queue.ErrorCategoryBlocked, task_queue.ErrorCategoryUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+func validQueueState(value string) bool {
+	switch value {
+	case "ready", "retry_scheduled", "backoff_waiting", "downloading", "numbering_ready", "metadata_blocked":
 		return true
 	default:
 		return false
@@ -145,7 +167,8 @@ func validErrorCategory(value string) bool {
 
 func summarizeJobs(jobs []taskQueueTypes.OneJob, now time.Time) backendTypes.QueueSummary {
 	summary := backendTypes.QueueSummary{
-		ByStatus: make(map[string]int), ByVideoType: make(map[string]int), ByErrorCategory: make(map[string]int),
+		ByStatus: make(map[string]int), ByVideoType: make(map[string]int),
+		ByErrorCategory: make(map[string]int), ActionableByErrorCategory: make(map[string]int),
 	}
 	seriesGroups := make(map[string]int)
 	readySeriesGroups := make(map[string]int)
@@ -155,12 +178,30 @@ func summarizeJobs(jobs []taskQueueTypes.OneJob, now time.Time) backendTypes.Que
 		summary.ByVideoType[job.VideoType.String()]++
 		diagnostic := task_queue.DiagnoseRetry(job, now)
 		summary.ByErrorCategory[string(diagnostic.Category)]++
+		if isActionableJob(job.JobStatus) {
+			summary.ActionableByErrorCategory[string(diagnostic.Category)]++
+		}
 		if diagnostic.IsScheduled {
 			summary.RetryScheduled++
+			if !diagnostic.IsReady {
+				summary.BackoffWaiting++
+				setEarlierTime(&summary.EarliestRetryAt, diagnostic.NextAttemptAt)
+			}
 		}
 		ready := job.JobStatus == taskQueueTypes.Waiting && (!diagnostic.IsScheduled || diagnostic.IsReady || diagnostic.IsForced)
 		if ready {
 			summary.ReadyNow++
+			readyAt := time.Time(job.AddedTime)
+			if readyAt.IsZero() || readyAt.Year() <= 1 {
+				readyAt = time.Time(job.UpdateTime)
+			}
+			setEarlierTime(&summary.OldestReadyAt, readyAt)
+		}
+		if job.JobStatus == taskQueueTypes.Downloading {
+			summary.Downloading++
+		}
+		if job.JobStatus == taskQueueTypes.Done {
+			setLaterTime(&summary.LastCompletedAt, time.Time(job.UpdateTime))
 		}
 		if job.JobStatus == taskQueueTypes.Waiting && job.SeriesRootDirPath != "" && job.Season > 0 {
 			summary.WaitingSeries++
@@ -175,7 +216,7 @@ func summarizeJobs(jobs []taskQueueTypes.OneJob, now time.Time) backendTypes.Que
 			}
 		}
 		message := strings.ToLower(job.ErrorInfo)
-		if strings.Contains(message, "series metadata episode not found") || strings.Contains(message, "series metadata root not found") {
+		if isActionableJob(job.JobStatus) && (strings.Contains(message, "series metadata episode not found") || strings.Contains(message, "series metadata root not found")) {
 			summary.MetadataBlocked++
 		}
 	}
@@ -188,7 +229,31 @@ func summarizeJobs(jobs []taskQueueTypes.OneJob, now time.Time) backendTypes.Que
 	return summary
 }
 
-func filterJobs(jobs []taskQueueTypes.OneJob, query jobPageQuery) []taskQueueTypes.OneJob {
+func isActionableJob(status taskQueueTypes.JobStatus) bool {
+	return status == taskQueueTypes.Waiting || status == taskQueueTypes.Failed || status == taskQueueTypes.Downloading
+}
+
+func setEarlierTime(destination **time.Time, candidate time.Time) {
+	if candidate.IsZero() || candidate.Year() <= 1 {
+		return
+	}
+	if *destination == nil || candidate.Before(**destination) {
+		value := candidate
+		*destination = &value
+	}
+}
+
+func setLaterTime(destination **time.Time, candidate time.Time) {
+	if candidate.IsZero() || candidate.Year() <= 1 {
+		return
+	}
+	if *destination == nil || candidate.After(**destination) {
+		value := candidate
+		*destination = &value
+	}
+}
+
+func filterJobs(jobs []taskQueueTypes.OneJob, query jobPageQuery, now time.Time) []taskQueueTypes.OneJob {
 	filtered := make([]taskQueueTypes.OneJob, 0, len(jobs))
 	search := strings.ToLower(query.Search)
 	for _, job := range jobs {
@@ -201,7 +266,13 @@ func filterJobs(jobs []taskQueueTypes.OneJob, query jobPageQuery) []taskQueueTyp
 		if !matchesPriority(job.TaskPriority, query.Priority) {
 			continue
 		}
+		if query.ActionableOnly && !isActionableJob(job.JobStatus) {
+			continue
+		}
 		if query.ErrorCategory != "" && string(task_queue.ClassifyErrorInfo(job.ErrorInfo)) != query.ErrorCategory {
+			continue
+		}
+		if query.QueueState != "" && !matchesQueueState(job, query.QueueState, now) {
 			continue
 		}
 		if search != "" && !strings.Contains(strings.ToLower(job.VideoName), search) &&
@@ -213,6 +284,29 @@ func filterJobs(jobs []taskQueueTypes.OneJob, query jobPageQuery) []taskQueueTyp
 		filtered = append(filtered, job)
 	}
 	return filtered
+}
+
+func matchesQueueState(job taskQueueTypes.OneJob, state string, now time.Time) bool {
+	diagnostic := task_queue.DiagnoseRetry(job, now)
+	switch state {
+	case "ready":
+		return job.JobStatus == taskQueueTypes.Waiting && (!diagnostic.IsScheduled || diagnostic.IsReady || diagnostic.IsForced)
+	case "retry_scheduled":
+		return diagnostic.IsScheduled
+	case "backoff_waiting":
+		return diagnostic.IsScheduled && !diagnostic.IsReady
+	case "downloading":
+		return job.JobStatus == taskQueueTypes.Downloading
+	case "numbering_ready":
+		return job.JobStatus == taskQueueTypes.Waiting && job.SeriesRootDirPath != "" && job.Season > 0 &&
+			(job.AbsoluteEpisode > 0 || (job.SceneSeason > 0 && job.SceneEpisode > 0))
+	case "metadata_blocked":
+		message := strings.ToLower(job.ErrorInfo)
+		return isActionableJob(job.JobStatus) && (strings.Contains(message, "series metadata episode not found") ||
+			strings.Contains(message, "series metadata root not found"))
+	default:
+		return true
+	}
 }
 
 func matchesPriority(priority int, filter string) bool {
@@ -232,14 +326,16 @@ func matchesPriority(priority int, filter string) bool {
 	}
 }
 
-func sortJobs(jobs []taskQueueTypes.OneJob, field, order string) {
+func sortJobs(jobs []taskQueueTypes.OneJob, field, order string, now time.Time) {
 	sort.SliceStable(jobs, func(i, j int) bool {
 		comparison := 0
 		switch field {
 		case "addedAt":
 			comparison = compareTime(time.Time(jobs[i].AddedTime), time.Time(jobs[j].AddedTime))
 		case "nextAttemptAt":
-			comparison = compareTime(time.Time(jobs[i].NextAttemptTime), time.Time(jobs[j].NextAttemptTime))
+			left := task_queue.DiagnoseRetry(jobs[i], now).NextAttemptAt
+			right := task_queue.DiagnoseRetry(jobs[j], now).NextAttemptAt
+			comparison = compareTime(left, right)
 		case "priority":
 			comparison = jobs[i].TaskPriority - jobs[j].TaskPriority
 		case "name":
@@ -266,15 +362,11 @@ func compareTime(left, right time.Time) int {
 
 func newJobView(job taskQueueTypes.OneJob, now time.Time) backendTypes.JobView {
 	diagnostic := task_queue.DiagnoseRetry(job, now)
-	aliases := make([]string, 0, 2)
-	if job.SeriesName != "" {
-		aliases = append(aliases, job.SeriesName)
-	}
+	aliasValues := append([]string{job.SeriesName}, job.SearchAliases...)
 	if rootName := filepath.Base(filepath.Clean(job.SeriesRootDirPath)); rootName != "." && rootName != string(filepath.Separator) {
-		if len(aliases) == 0 || !strings.EqualFold(aliases[0], rootName) {
-			aliases = append(aliases, rootName)
-		}
+		aliasValues = append(aliasValues, rootName)
 	}
+	aliases := taskQueueTypes.NormalizeSearchAliases(aliasValues...)
 	identity := episode_identity.Identity{
 		Season: job.Season, Episode: job.Episode, AbsoluteEpisode: job.AbsoluteEpisode,
 		SceneSeason: job.SceneSeason, SceneEpisode: job.SceneEpisode, Confidence: job.NumberingConfidence,

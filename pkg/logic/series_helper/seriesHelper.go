@@ -13,6 +13,7 @@ import (
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/media_info_dealers"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/search"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_candidate"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
@@ -252,12 +253,25 @@ func DownloadSubtitleInAllSiteByOneSeriesContext(ctx context.Context, logger *lo
 		ranked := subtitle_candidate.Rank(items, strongTarget)
 		return len(ranked) > 0 && ranked[0].Score >= 700
 	}
-	outSUbInfos, searchErr := supplier_search.RunContext(ctx, logger, Suppliers, supplier_search.NewSearchID("series"), fastEnough,
+	cohort := subtitle_metrics.CohortSeries
+	if seriesInfo.IsAnime {
+		cohort = subtitle_metrics.CohortAnime
+	}
+	searchReport := supplier_search.RunContextWithReportForCohort(ctx, logger, Suppliers, supplier_search.NewSearchID(cohort.Label()),
+		cohort, fastEnough,
 		func(searchCtx context.Context, oneSupplier ifaces.ISupplier) ([]supplier.SubInfo, error) {
 			subInfos, err := downloadFromSeriesSupplier(searchCtx, oneSupplier, seriesInfo)
 			sub_helper.ChangeVideoExt2SubExt(subInfos)
 			return subInfos, err
 		})
+	outSUbInfos := searchReport.Items
+	searchErr := searchReport.OutcomeError()
+	if searchReport.Degraded {
+		logger.WithFields(logrus.Fields{
+			"event": "supplier_search_degraded", "media_type": cohort.Label(),
+			"provider_count": len(searchReport.Providers), "candidate_count": len(outSUbInfos),
+		}).Warn("series supplier search completed with unavailable providers")
+	}
 	if searchErr != nil {
 		logger.WithError(searchErr).Warn("series supplier search stopped")
 	}

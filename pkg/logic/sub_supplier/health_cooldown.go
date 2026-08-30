@@ -3,6 +3,8 @@ package sub_supplier
 import (
 	"sync"
 	"time"
+
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 )
 
 const (
@@ -52,6 +54,12 @@ func (h *supplierHealthCooldown) record(name string, alive bool, now time.Time) 
 
 func shouldRemoveSupplier(name string, skipped map[string]struct{}, alive, overLimit bool) bool {
 	_, wasSkipped := skipped[name]
+	if name == common.SubSiteOpenSubtitles && alive && overLimit && !wasSkipped {
+		// OpenSubtitles exposes an exact quota recovery window. Keep the healthy
+		// supplier in the hub so searches can report that RetryAt and resume without
+		// waiting for the next hourly supplier rebuild.
+		return false
+	}
 	return wasSkipped || !alive || overLimit
 }
 

@@ -8,7 +8,9 @@ import (
 	"time"
 
 	subSupplier "github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_supplier"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/supplier_search"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/net/context"
 )
 
 func TestTryStartQueueWorkerHonorsCapacity(t *testing.T) {
@@ -122,16 +124,16 @@ func TestQueueLogUsesOneExplicitBatchForOverlappingJobs(t *testing.T) {
 
 func TestCleanupPendingSurvivesUntilLastWorker(t *testing.T) {
 	d := &Downloader{activeQueueWorkers: 2}
-	active, cleanup := d.updateQueueWorkerOnFinishLocked(true)
-	if active != 1 || cleanup {
-		t.Fatalf("working worker exit returned active=%d cleanup=%t, want 1,false", active, cleanup)
+	active, scheduled := d.updateQueueWorkerOnFinishLocked(true)
+	if active != 1 || scheduled {
+		t.Fatalf("working worker exit returned active=%d scheduled=%t, want 1,false", active, scheduled)
 	}
-	active, cleanup = d.updateQueueWorkerOnFinishLocked(false)
-	if active != 0 || !cleanup {
-		t.Fatalf("last idle worker exit returned active=%d cleanup=%t, want 0,true", active, cleanup)
+	active, scheduled = d.updateQueueWorkerOnFinishLocked(false)
+	if active != 0 || !scheduled {
+		t.Fatalf("last idle worker exit returned active=%d scheduled=%t, want 0,true", active, scheduled)
 	}
-	if d.queueCleanupPending {
-		t.Fatal("cleanup pending flag was not cleared")
+	if !d.queueCleanupPending || !d.queueCleanupScheduled {
+		t.Fatal("cleanup state was cleared before asynchronous cleanup")
 	}
 }
 
@@ -140,5 +142,35 @@ func TestIdleWorkersDoNotRequestCleanup(t *testing.T) {
 	active, cleanup := d.updateQueueWorkerOnFinishLocked(false)
 	if active != 0 || cleanup {
 		t.Fatalf("idle worker exit returned active=%d cleanup=%t, want 0,false", active, cleanup)
+	}
+}
+
+func TestCanceledDownloaderStopsDeferredCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &Downloader{
+		ctx: ctx, log: logrus.New(),
+		queueCleanupPending: true, queueCleanupScheduled: true,
+	}
+	finishSharedResourceUse := supplier_search.BeginSharedResourceUse()
+	defer finishSharedResourceUse()
+	d.scheduleQueueCleanup()
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		d.queueCleanupWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled downloader retained a deferred cleanup goroutine")
+	}
+	d.queueWorkerStateLock.Lock()
+	scheduled := d.queueCleanupScheduled
+	pending := d.queueCleanupPending
+	d.queueWorkerStateLock.Unlock()
+	if scheduled || !pending {
+		t.Fatalf("canceled cleanup state scheduled=%t pending=%t", scheduled, pending)
 	}
 }

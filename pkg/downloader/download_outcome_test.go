@@ -47,18 +47,96 @@ func TestRunSubtitleSaveWithContextConvertsPanicToError(t *testing.T) {
 	}
 }
 
-func TestRunSubtitleSaveWithContextReturnsOnCancellation(t *testing.T) {
+func TestRunSubtitleSaveWithContextWaitsForSaveAfterCancellation(t *testing.T) {
+	started := make(chan struct{})
 	release := make(chan struct{})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	startedAt := time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan error, 1)
+	go func() {
+		returned <- runSubtitleSaveWithContext(ctx, func() error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	cancel()
+
+	select {
+	case got := <-returned:
+		close(release)
+		t.Fatalf("wrapper returned before the real save stopped: %v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case got := <-returned:
+		if !errors.Is(got, context.Canceled) {
+			t.Fatalf("runSubtitleSaveWithContext() = %v, want context cancellation after save joined", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wrapper did not return after the real save stopped")
+	}
+}
+
+func TestRunSubtitleSaveWithContextSkipsSaveWhenAlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
 	got := runSubtitleSaveWithContext(ctx, func() error {
-		<-release
+		called = true
 		return nil
 	})
+	if called || !errors.Is(got, context.Canceled) {
+		t.Fatalf("already-canceled save called=%t err=%v", called, got)
+	}
+}
+
+func TestWaitQueueWorkerResultJoinsBlockingSaveOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	workerDone := make(chan queueWorkerResult, 1)
+	go func() {
+		workerDone <- queueWorkerResult{err: runSubtitleSaveWithContext(ctx, func() error {
+			close(started)
+			<-release
+			return nil
+		})}
+	}()
+	<-started
+
+	cancelObserved := make(chan struct{})
+	waitReturned := make(chan queueWorkerResult, 1)
+	go func() {
+		result, canceled := waitQueueWorkerResult(ctx, workerDone, func() { close(cancelObserved) })
+		if !canceled {
+			result.err = errors.New("worker wait did not observe cancellation")
+		}
+		waitReturned <- result
+	}()
+	cancel()
+	select {
+	case <-cancelObserved:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("worker wait did not observe cancellation")
+	}
+
+	select {
+	case result := <-waitReturned:
+		close(release)
+		t.Fatalf("worker wait returned before subtitle save stopped: %v", result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
 	close(release)
-	if !errors.Is(got, context.DeadlineExceeded) || time.Since(startedAt) > time.Second {
-		t.Fatalf("cancellation not enforced promptly: elapsed=%s err=%v", time.Since(startedAt), got)
+	select {
+	case result := <-waitReturned:
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("joined worker result = %v, want context cancellation", result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker wait did not return after subtitle save stopped")
 	}
 }
 

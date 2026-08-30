@@ -3,9 +3,12 @@
 
 package lock
 
+import "sync"
+
 func ExampleNewLock() {
 	var l = NewLock()
 	var wg sync.WaitGroup
+	counter := 0
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {

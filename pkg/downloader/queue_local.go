@@ -16,9 +16,26 @@ import (
 	"golang.org/x/net/context"
 )
 
-type queueWorkerPanic struct {
-	value interface{}
-	stack []byte
+type queueWorkerResult struct {
+	err        error
+	panicValue interface{}
+	stack      []byte
+}
+
+// waitQueueWorkerResult releases administrative ownership promptly on daemon
+// cancellation, but does not let the outer worker return until the actual job
+// goroutine has stopped. Shared browser and temporary-file cleanup therefore
+// cannot overlap a non-context-aware subtitle save.
+func waitQueueWorkerResult(ctx context.Context, done <-chan queueWorkerResult, onCancel func()) (queueWorkerResult, bool) {
+	select {
+	case result := <-done:
+		return result, false
+	case <-ctx.Done():
+		if onCancel != nil {
+			onCancel()
+		}
+		return <-done, true
+	}
 }
 
 func (d *Downloader) queueDownloaderLocal() {
@@ -49,6 +66,10 @@ func (d *Downloader) queueDownloaderLocal() {
 	nowSubSupplierHub := d.getSubSupplierHub()
 	if nowSubSupplierHub == nil {
 		d.log.Debugln("Download.QueueDownloader() supplier hub is not ready")
+		return
+	}
+	if len(nowSubSupplierHub.Suppliers) == 0 {
+		d.log.Debugln("Download.QueueDownloader() has no active suppliers")
 		return
 	}
 	// 移除查过三个月的 Done 任务
@@ -260,25 +281,20 @@ func (d *Downloader) queueDownloaderLocal() {
 	seriesBatch := []taskQueue2.OneJob{oneJob}
 	if oneJob.VideoType != common2.Movie {
 		seriesBatch = d.readySeriesBatch(oneJob)
-		if len(seriesBatch) > 1 {
-			d.log.WithFields(map[string]interface{}{
-				"event": "series_batch_claimed", "batch_size": len(seriesBatch), "season": oneJob.Season,
-			}).Info("ready series episodes coalesced")
-		}
 	}
-	// 取出来后，需要标记为正在下载
-	oneJob.JobStatus = taskQueue2.Downloading
-	oneJob.ForceRun = false
-	bok, err = d.downloadQueue.Update(oneJob)
+	seriesBatch, err = d.downloadQueue.ClaimBatch(seriesBatch, time.Now())
 	if err != nil {
-		d.log.Errorln("d.downloadQueue.Update()", err)
+		if err != task_queue.ErrClaimUnavailable {
+			d.log.Errorln("d.downloadQueue.ClaimBatch()", err)
+		}
 		return
 	}
-	if bok == false {
-		d.log.Errorln("d.downloadQueue.Update() Failed")
-		return
+	oneJob = seriesBatch[0]
+	if len(seriesBatch) > 1 {
+		d.log.WithFields(map[string]interface{}{
+			"event": "series_batch_claimed", "batch_size": len(seriesBatch), "season": oneJob.Season,
+		}).Info("ready series episodes coalesced")
 	}
-	seriesBatch[0] = oneJob
 	unregisterSeries := d.registerSeriesWorker(oneJob.SeriesRootDirPath)
 	defer unregisterSeries()
 	didWork = true
@@ -291,18 +307,18 @@ func (d *Downloader) queueDownloaderLocal() {
 	jobCtx, cancelJob := context.WithTimeout(d.ctx,
 		time.Duration(settings.Get().AdvancedSettings.TaskQueue.OneJobTimeOut)*time.Second)
 	defer cancelJob()
-	// 创建一个 chan 用于任务的中断和超时
-	done := make(chan interface{}, 1)
-	// 接收内部任务的 panic
-	panicChan := make(chan queueWorkerPanic, 1)
+	// A single terminal result channel prevents a recovered panic from racing
+	// with a separately closed "done" channel and being silently lost.
+	done := make(chan queueWorkerResult, 1)
 
 	go func() {
+		result := queueWorkerResult{}
 		defer func() {
 			if p := recover(); p != nil {
-				panicChan <- queueWorkerPanic{value: p, stack: debug.Stack()}
+				result.panicValue = p
+				result.stack = debug.Stack()
 			}
-			close(done)
-			close(panicChan)
+			done <- result
 		}()
 		unlockSeries := d.lockSeriesWorker(oneJob.SeriesRootDirPath)
 		defer unlockSeries()
@@ -310,40 +326,63 @@ func (d *Downloader) queueDownloaderLocal() {
 		if oneJob.VideoType == common2.Movie {
 			// 电影
 			// 具体的下载逻辑 func()
-			done <- d.movieDlFunc(jobCtx, oneJob, downloadCounter)
+			result.err = d.movieDlFunc(jobCtx, oneJob, downloadCounter)
 		} else if oneJob.VideoType == common2.Series || oneJob.VideoType == common2.Anime {
 			// 连续剧
 			// 具体的下载逻辑 func()
-			done <- d.seriesDlFuncBatch(jobCtx, oneJob, seriesBatch, downloadCounter)
+			result.err = d.seriesDlFuncBatch(jobCtx, oneJob, seriesBatch, downloadCounter)
 		} else {
 			d.log.Errorln("oneJob.VideoType not support, oneJob.VideoType = ", oneJob.VideoType)
-			done <- nil
 		}
 	}()
-
-	select {
-	case err := <-done:
-		// 跳出 select，可以外层继续，不会阻塞在这里
-		if err != nil {
-			d.log.Errorln(err)
+	releaseClaimForRetry := func(delay time.Duration, reason string) {
+		if releaseErr := d.downloadQueue.ReleaseClaimsForRetry(seriesBatch, delay); releaseErr != nil {
+			d.log.WithError(releaseErr).WithField("reason", reason).Error("release queue claim for retry")
 		}
-		// 刷新视频的缓存结构
-		//d.UpdateInfo(oneJob)
-
-		break
-	case p, ok := <-panicChan:
-		// panicChan 正常关闭时也可被 select 选中，此时收到的是 nil。
-		// 只有真正捕获到 panic 值时才向外抛出，避免 panic(nil) 刷屏。
-		if ok && p.value != nil {
-			panicErr := fmt.Errorf("download worker panic: %v", p.value)
-			d.log.Errorf("%v\n%s", panicErr, p.stack)
-			d.downloadQueue.AutoDetectUpdateJobStatus(oneJob, panicErr)
-		}
-	case <-d.ctx.Done():
-		{
-			// 取消这个 context
-			d.log.Warningln("cancel Downloader.QueueDownloader()")
+	}
+	handleResult := func(result queueWorkerResult) {
+		// This is also a final guard for suppliers returning without a terminal
+		// outcome and for an unknown/corrupt VideoType. A completed outcome has
+		// already released its generation, making this a cheap no-op.
+		defer func() {
+			delay := time.Minute
+			if d.ctx.Err() != nil {
+				delay = 15 * time.Second
+			}
+			releaseClaimForRetry(delay, "worker_exit")
+		}()
+		if d.ctx.Err() != nil {
+			if result.panicValue != nil {
+				d.log.Errorf("download worker stopped during shutdown after panic: %v\n%s", result.panicValue, result.stack)
+			}
 			return
 		}
+		if result.panicValue != nil {
+			panicErr := fmt.Errorf("download worker panic: %v", result.panicValue)
+			d.log.Errorf("%v\n%s", panicErr, result.stack)
+			outcomes := make([]task_queue.JobOutcome, 0, len(seriesBatch))
+			for _, batchJob := range seriesBatch {
+				outcomes = append(outcomes, task_queue.JobOutcome{Job: batchJob, Err: panicErr})
+			}
+			if outcomeErr := d.downloadQueue.ApplyOutcomesReliable(outcomes); outcomeErr != nil && outcomeErr != task_queue.ErrClaimUnavailable {
+				d.log.Errorln("persist panic batch outcomes", outcomeErr)
+			}
+			return
+		}
+		if result.err != nil {
+			d.log.Errorln(result.err)
+		}
+	}
+
+	result, canceled := waitQueueWorkerResult(d.ctx, done, func() {
+		// Administrative shutdown is not a supplier failure. Release the active
+		// generation without incrementing attempts/retries or degrading priority;
+		// any late worker outcome carries the old token and is ignored.
+		releaseClaimForRetry(15*time.Second, "daemon_shutdown")
+	})
+	handleResult(result)
+	if canceled {
+		d.log.Warningln("cancel Downloader.QueueDownloader()")
+		return
 	}
 }

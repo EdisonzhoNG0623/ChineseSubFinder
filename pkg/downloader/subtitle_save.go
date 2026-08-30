@@ -5,26 +5,25 @@ import (
 	"fmt"
 )
 
-// runSubtitleSaveWithContext returns exactly one terminal result. A single
-// buffered channel avoids racing a successful result against a separately
-// closed panic channel.
+// runSubtitleSaveWithContext checks cancellation around a synchronous save.
+// The underlying subtitle writer is not context-aware, so returning as soon as
+// ctx is canceled would leave it writing after the worker and shared cleanup
+// have exited. Waiting here guarantees that a returned cancellation is final:
+// no background save remains active.
 func runSubtitleSaveWithContext(ctx context.Context, save func() error) error {
-	result := make(chan error, 1)
-	go func() {
-		var saveErr error
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	saveErr := func() (err error) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				saveErr = fmt.Errorf("subtitle save panic: %v", recovered)
+				err = fmt.Errorf("subtitle save panic: %v", recovered)
 			}
-			result <- saveErr
 		}()
-		saveErr = save()
+		return save()
 	}()
-
-	select {
-	case saveErr := <-result:
-		return saveErr
-	case <-ctx.Done():
-		return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	return saveErr
 }

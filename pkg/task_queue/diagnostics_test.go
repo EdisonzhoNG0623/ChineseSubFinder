@@ -13,9 +13,11 @@ func TestClassifyErrorInfo(t *testing.T) {
 		"":                          ErrorCategoryNone,
 		"No Sub Found":              ErrorCategoryNoSubtitle,
 		"context deadline exceeded": ErrorCategoryTransient,
-		"permission denied":         ErrorCategoryLocal,
-		"subhd page blocked by site verification": ErrorCategoryBlocked,
-		"unexpected supplier response":            ErrorCategoryUnknown,
+		"supplier quota exhausted (too many requests)": ErrorCategoryQuota,
+		"supplier search provider unavailable":         ErrorCategoryUnavailable,
+		"permission denied":                            ErrorCategoryLocal,
+		"subhd page blocked by site verification":      ErrorCategoryBlocked,
+		"unexpected supplier response":                 ErrorCategoryUnknown,
 	}
 	for message, want := range tests {
 		if got := ClassifyErrorInfo(message); got != want {
@@ -36,5 +38,19 @@ func TestDiagnoseRetry(t *testing.T) {
 	got := DiagnoseRetry(job, now)
 	if !got.IsScheduled || got.IsReady || got.RetryInSeconds != int64((12*time.Hour)/time.Second) {
 		t.Fatalf("unexpected retry diagnostic: %+v", got)
+	}
+}
+
+func TestDiagnoseRetryAdministrativeNotBeforeSuppressesForceRun(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.Local)
+	job := taskQueueTypes.OneJob{
+		JobStatus:     taskQueueTypes.Waiting,
+		ForceRun:      true,
+		NotBeforeTime: emby.Time(now.Add(time.Minute)),
+	}
+	got := DiagnoseRetry(job, now)
+	if got.IsForced || !got.IsScheduled || got.IsReady ||
+		!got.NextAttemptAt.Equal(now.Add(time.Minute)) || got.RetryInSeconds != 60 {
+		t.Fatalf("administrative not-before did not suppress force-run diagnostic: %+v", got)
 	}
 }

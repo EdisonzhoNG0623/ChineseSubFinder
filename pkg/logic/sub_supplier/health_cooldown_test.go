@@ -3,6 +3,8 @@ package sub_supplier
 import (
 	"testing"
 	"time"
+
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 )
 
 func TestSupplierHealthCooldownStartsAfterConsecutiveFailures(t *testing.T) {
@@ -21,6 +23,19 @@ func TestSupplierHealthCooldownStartsAfterConsecutiveFailures(t *testing.T) {
 	probe, _ = health.shouldProbe("site", next)
 	if !probe {
 		t.Fatal("supplier should be probed when cooldown expires")
+	}
+}
+
+func TestHealthyOpenSubtitlesQuotaDoesNotRemoveSupplier(t *testing.T) {
+	skipped := map[string]struct{}{}
+	if shouldRemoveSupplier(common.SubSiteOpenSubtitles, skipped, true, true) {
+		t.Fatal("healthy OpenSubtitles quota must remain in the hub for timed recovery")
+	}
+	if !shouldRemoveSupplier(common.SubSiteOpenSubtitles, skipped, false, true) {
+		t.Fatal("unhealthy OpenSubtitles supplier must still be removed")
+	}
+	if !shouldRemoveSupplier(common.SubSiteAssrt, skipped, true, true) {
+		t.Fatal("legacy daily-limit suppliers must keep their existing removal behavior")
 	}
 }
 

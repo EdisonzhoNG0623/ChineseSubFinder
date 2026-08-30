@@ -2,6 +2,7 @@ package v1
 
 import (
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -61,13 +62,14 @@ var supplierDefinitions = []supplierDefinition{
 
 func buildSupplierDiagnostics(s *settings.Settings, runtime map[string]subtitle_metrics.SupplierRuntime, used map[string]int) []backendTypes.SupplierDiagnostic {
 	out := make([]backendTypes.SupplierDiagnostic, 0, len(supplierDefinitions))
+	now := time.Now()
 	for _, definition := range supplierDefinitions {
 		one := supplierSettingsByName(s, definition.name)
 		diagnostic := backendTypes.SupplierDiagnostic{Name: definition.name, DisplayName: definition.display,
-			DefaultRootURL: definition.defaultURL, Capabilities: append([]string(nil), definition.capabilities...), Health: "UNKNOWN",
+			DefaultRootURL: safeSupplierRootURL(definition.defaultURL), Capabilities: append([]string(nil), definition.capabilities...), Health: "UNKNOWN",
 			SearchBudgetMs: supplier_search.CurrentTimeout(definition.name).Milliseconds()}
 		if one != nil {
-			diagnostic.RootURL, diagnostic.DailyLimit = one.RootUrl, one.DailyDownloadLimit
+			diagnostic.RootURL, diagnostic.DailyLimit = safeSupplierRootURL(one.RootUrl), one.DailyDownloadLimit
 			diagnostic.Enabled = one.DailyDownloadLimit != 0
 		} else if definition.name == common.SubSiteOpenSubtitles || definition.name == common.SubSiteSubSource {
 			diagnostic.RootURL, diagnostic.DailyLimit, diagnostic.Enabled = definition.defaultURL, -1, true
@@ -89,11 +91,19 @@ func buildSupplierDiagnostics(s *settings.Settings, runtime map[string]subtitle_
 			diagnostic.CooldownUntil, diagnostic.Attempts = record.CooldownUntil, record.Attempts
 			diagnostic.CandidateHits, diagnostic.EmptyResults, diagnostic.Errors = record.CandidateHits, record.EmptyResults, record.Errors
 			diagnostic.Candidates, diagnostic.LastAttemptAt, diagnostic.LastAttemptMillis = record.Candidates, record.LastAttemptAt, record.LastAttemptMs
+			if !record.LastErrorAt.IsZero() {
+				value := record.LastErrorAt
+				diagnostic.LastErrorAt = &value
+			}
+			if summary := supplierErrorSummary(record.LastErrorCode); summary != "" {
+				diagnostic.LastErrorCode = record.LastErrorCode
+				diagnostic.LastErrorSummary = summary
+			}
 			diagnostic.AverageAttemptMs, diagnostic.P95AttemptMs = record.AverageAttemptMillis(), record.P95AttemptMillis()
 			diagnostic.Timeouts, diagnostic.CircuitSkips, diagnostic.CircuitOpenUntil = record.Timeouts, record.CircuitSkips, record.CircuitOpenUntil
 			diagnostic.Selections, diagnostic.Saves = record.Selections, record.Saves
 			diagnostic.CacheHits, diagnostic.EarlyStops = record.CacheHits, record.EarlyStops
-			if time.Now().Before(record.CircuitOpenUntil) {
+			if now.Before(record.CircuitOpenUntil) {
 				diagnostic.Health = "DEGRADED"
 				diagnostic.StatusMessage = "连续失败，已临时跳过以释放队列"
 			}
@@ -104,16 +114,59 @@ func buildSupplierDiagnostics(s *settings.Settings, runtime map[string]subtitle_
 		case diagnostic.Attempts == 0:
 			diagnostic.AttemptState = "NOT_ATTEMPTED"
 			diagnostic.NotAttemptedReason = "尚无适用任务，或服务重启后尚未轮到该字幕源"
-		case !diagnostic.CircuitOpenUntil.IsZero() && time.Now().Before(diagnostic.CircuitOpenUntil):
+		case !diagnostic.CircuitOpenUntil.IsZero() && now.Before(diagnostic.CircuitOpenUntil):
 			diagnostic.AttemptState = "SKIPPED_TEMPORARILY"
 			diagnostic.NotAttemptedReason = "连续错误触发临时熔断，冷却后自动恢复"
 		default:
 			diagnostic.AttemptState = "ATTEMPTED"
 		}
+		diagnostic.AttentionRequired = supplierNeedsAttention(diagnostic, now)
 		out = append(out, diagnostic)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func supplierNeedsAttention(diagnostic backendTypes.SupplierDiagnostic, now time.Time) bool {
+	if diagnostic.Health == "RETIRED" {
+		return true
+	}
+	if !diagnostic.Enabled {
+		return false
+	}
+	if !diagnostic.CooldownUntil.IsZero() && now.Before(diagnostic.CooldownUntil) {
+		return true
+	}
+	if !diagnostic.CircuitOpenUntil.IsZero() && now.Before(diagnostic.CircuitOpenUntil) {
+		return true
+	}
+	switch diagnostic.Health {
+	case "DEGRADED", "UNHEALTHY", "COOLDOWN":
+		return true
+	default:
+		return false
+	}
+}
+
+func supplierErrorSummary(code string) string {
+	switch code {
+	case "TIMEOUT":
+		return "请求超时"
+	case "QUOTA":
+		return "配额或频率限制"
+	case "AUTH":
+		return "认证失败"
+	case "BLOCKED":
+		return "验证码或访问限制"
+	case "NETWORK":
+		return "网络连接失败"
+	case "PROVIDER":
+		return "字幕源响应异常"
+	case "UNKNOWN":
+		return "未分类错误"
+	default:
+		return ""
+	}
 }
 
 func supplierSettingsByName(s *settings.Settings, name string) *settings.OneSupplierSettings {
@@ -175,4 +228,20 @@ func supplierCredentialConfigured(s *settings.Settings, name string) bool {
 func isRetiredA4KRoot(value string) bool {
 	value = strings.TrimRight(strings.ToLower(strings.TrimSpace(value)), "/")
 	return value == "https://a4k.net" || value == "https://www.a4k.net" || value == "http://a4k.net" || value == "http://www.a4k.net"
+}
+
+// safeSupplierRootURL exposes only a normalized origin. Custom endpoints may
+// contain basic-auth userinfo, token query parameters or private route paths;
+// none of those belong in an operations diagnostics response.
+func safeSupplierRootURL(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	parsed.User = nil
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimRight(parsed.String(), "/")
 }

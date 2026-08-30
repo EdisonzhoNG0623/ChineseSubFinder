@@ -41,6 +41,9 @@ func TestRetryDelayClasses(t *testing.T) {
 		{name: "no subtitle capped", error: "No Sub Found", attempts: 100, want: 30 * 24 * time.Hour},
 		{name: "transient first", error: "context deadline exceeded", attempts: 1, want: 30 * time.Minute},
 		{name: "transient capped", error: "connection reset by peer", attempts: 100, want: 6 * time.Hour},
+		{name: "provider unavailable", error: "supplier search provider unavailable", attempts: 2, want: time.Hour},
+		{name: "quota", error: "supplier quota exhausted", attempts: 1, want: 30 * time.Minute},
+		{name: "provider blocked", error: "supplier search provider blocked", attempts: 1, want: 6 * time.Hour},
 		{name: "persistent capped", error: "no metadata file", attempts: 100, want: 7 * 24 * time.Hour},
 		{name: "unknown capped", error: "unexpected supplier response", attempts: 100, want: 24 * time.Hour},
 	}
@@ -52,6 +55,27 @@ func TestRetryDelayClasses(t *testing.T) {
 				t.Fatalf("retryDelay() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+type retryAtTestError struct{ at time.Time }
+
+func (e retryAtTestError) Error() string          { return "supplier quota exhausted" }
+func (e retryAtTestError) RetryAtTime() time.Time { return e.at }
+
+func TestScheduleRetryForErrorHonorsProviderRecoveryTime(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	retryAt := now.Add(9 * time.Hour)
+	job := taskQueue2.OneJob{ErrorInfo: "supplier quota exhausted", DownloadTimes: 1}
+	scheduleRetryForError(&job, now, retryAtTestError{at: retryAt})
+	if got := time.Time(job.NextAttemptTime); !got.Equal(retryAt) {
+		t.Fatalf("next attempt = %s, want provider reset %s", got, retryAt)
+	}
+
+	job = taskQueue2.OneJob{ErrorInfo: "supplier quota exhausted", DownloadTimes: 1}
+	scheduleRetryForError(&job, now, retryAtTestError{at: now.Add(time.Minute)})
+	if got := time.Time(job.NextAttemptTime); !got.Equal(now.Add(30 * time.Minute)) {
+		t.Fatalf("short provider reset bypassed queue minimum: %s", got)
 	}
 }
 
@@ -72,6 +96,22 @@ func TestNextAttemptAtHonorsForceRunAndPersistedSchedule(t *testing.T) {
 	}
 }
 
+func TestNextAttemptAtHonorsAdministrativeNotBeforeForUnattemptedJob(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	job := taskQueue2.OneJob{DownloadTimes: 0, NotBeforeTime: emby.Time(now.Add(time.Minute))}
+	if got := nextAttemptAt(job); !got.Equal(now.Add(time.Minute)) {
+		t.Fatalf("unattempted administrative retry = %v", got)
+	}
+	job.ForceRun = true
+	if got := nextAttemptAt(job); !got.Equal(now.Add(time.Minute)) {
+		t.Fatalf("force flag bypassed independent administrative delay: %v", got)
+	}
+	job.NotBeforeTime = emby.Time{}
+	if got := nextAttemptAt(job); !got.IsZero() {
+		t.Fatalf("cleared administrative delay did not allow explicit force: %v", got)
+	}
+}
+
 func TestNextAttemptAtAppliesNewNoSubMinimumToOldSchedule(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	job := taskQueue2.OneJob{
@@ -82,6 +122,76 @@ func TestNextAttemptAtAppliesNewNoSubMinimumToOldSchedule(t *testing.T) {
 	}
 	if got := nextAttemptAt(job); !got.Equal(now.Add(30 * 24 * time.Hour)) {
 		t.Fatalf("nextAttemptAt() = %v, want current no-sub minimum", got)
+	}
+}
+
+func TestNoSubtitleRetryWakesOnlyWhenSearchEvidenceChanges(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	policy := settings.CurrentSearchPolicyFingerprint()
+	job := taskQueue2.OneJob{
+		DownloadTimes: 2, ErrorInfo: ErrNoSubFound.Error(), UpdateTime: emby.Time(now),
+		NextAttemptTime: emby.Time(now.Add(48 * time.Hour)), SearchFingerprint: "identity-v1",
+		LastAttemptSearchFingerprint: "identity-v1", LastAttemptPolicyFingerprint: policy,
+	}
+	if got := nextAttemptAt(job); got.IsZero() {
+		t.Fatal("unchanged evidence unexpectedly woke a conclusive miss")
+	}
+
+	job.SearchFingerprint = "identity-v2"
+	if got := nextAttemptAt(job); !got.IsZero() {
+		t.Fatalf("identity correction did not wake miss: %s", got)
+	}
+	job.SearchFingerprint = job.LastAttemptSearchFingerprint
+	job.LastAttemptPolicyFingerprint = "older-policy"
+	if got := nextAttemptAt(job); !got.IsZero() {
+		t.Fatalf("search policy change did not wake miss: %s", got)
+	}
+
+	job.ErrorInfo = "permission denied"
+	if got := nextAttemptAt(job); got.IsZero() {
+		t.Fatal("policy change bypassed a local filesystem failure")
+	}
+}
+
+func TestProviderRetryWakesOnlyWhenSearchPolicyChanges(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	policy := settings.CurrentSearchPolicyFingerprint()
+	providerErrors := []string{
+		"supplier quota exhausted",
+		"supplier search provider unavailable",
+		"supplier search provider blocked",
+	}
+
+	for _, message := range providerErrors {
+		t.Run(message, func(t *testing.T) {
+			job := taskQueue2.OneJob{
+				DownloadTimes: 2, ErrorInfo: message, UpdateTime: emby.Time(now),
+				NextAttemptTime: emby.Time(now.Add(24 * time.Hour)), SearchFingerprint: "identity-v1",
+				LastAttemptSearchFingerprint: "identity-v1", LastAttemptPolicyFingerprint: policy,
+			}
+			if got := nextAttemptAt(job); got.IsZero() {
+				t.Fatal("unchanged policy unexpectedly bypassed provider cooldown")
+			}
+
+			job.SearchFingerprint = "identity-v2"
+			if got := nextAttemptAt(job); got.IsZero() {
+				t.Fatal("identity-only change unexpectedly bypassed provider cooldown")
+			}
+
+			job.LastAttemptPolicyFingerprint = "older-policy"
+			if got := nextAttemptAt(job); !got.IsZero() {
+				t.Fatalf("search policy change did not wake provider retry: %s", got)
+			}
+		})
+	}
+
+	job := taskQueue2.OneJob{
+		DownloadTimes: 2, ErrorInfo: "permission denied", UpdateTime: emby.Time(now),
+		NextAttemptTime:              emby.Time(now.Add(24 * time.Hour)),
+		LastAttemptPolicyFingerprint: "older-policy",
+	}
+	if got := nextAttemptAt(job); got.IsZero() {
+		t.Fatal("policy change bypassed a local filesystem failure")
 	}
 }
 
@@ -106,6 +216,7 @@ func TestQueueRetryLifecycleAndBackoff(t *testing.T) {
 		t.Fatalf("Add() = %v, %v", ok, err)
 	}
 
+	_, job = queue.GetOneJobByID(job.Id)
 	queue.AutoDetectUpdateJobStatus(job, ErrNoSubFound)
 	ok, current := queue.GetOneJobByID(job.Id)
 	if !ok {
@@ -130,12 +241,16 @@ func TestQueueRetryLifecycleAndBackoff(t *testing.T) {
 	if err != nil || !found || forced.Id != job.Id {
 		t.Fatalf("forced job not selected: found=%v job=%+v err=%v", found, forced, err)
 	}
-	forced.ForceRun = false
 	queue.AutoDetectUpdateJobStatus(forced, errors.New("temporary network timeout"))
 
 	_, current = queue.GetOneJobByID(job.Id)
 	current.ForceRun = true
-	queue.Update(current)
+	if ok, err := queue.Update(current); err != nil || !ok {
+		t.Fatalf("second Update(force) = %v, %v", ok, err)
+	}
+	// Update refreshes the persisted lifecycle timestamp; token-zero outcomes
+	// must use the resulting current snapshot rather than an older copy.
+	_, current = queue.GetOneJobByID(job.Id)
 	queue.AutoDetectUpdateJobStatus(current, errors.New("temporary network timeout"))
 	_, current = queue.GetOneJobByID(job.Id)
 	if current.TaskPriority != FirstRetryTaskPriorityLevel+1 || current.RetryTimes != 0 {
@@ -205,10 +320,13 @@ func TestQueueStartupMigration(t *testing.T) {
 		t.Fatalf("BDMV startup migration failed: %+v", bdmv)
 	}
 	_, interrupted := queue.GetOneJobByID("interrupted")
-	if interrupted.JobStatus != taskQueue2.Waiting || interrupted.DownloadTimes != 1 ||
-		interrupted.ErrorInfo != "download interrupted by process restart" ||
-		!time.Time(interrupted.NextAttemptTime).After(now) {
+	if interrupted.JobStatus != taskQueue2.Waiting || interrupted.DownloadTimes != 0 ||
+		interrupted.RetryTimes != 0 || interrupted.ErrorInfo != "" ||
+		!time.Time(interrupted.NotBeforeTime).After(now) {
 		t.Fatalf("interrupted job recovery failed: %+v", interrupted)
+	}
+	if next, ok := queue.NextWakeAt(); !ok || next.Before(now.Add(30*time.Second)) {
+		t.Fatalf("interrupted recovery can hot-loop: next=%s ok=%v", next, ok)
 	}
 	_, legacyRetry := queue.GetOneJobByID("legacy-retry")
 	if !time.Time(legacyRetry.NextAttemptTime).After(now) {

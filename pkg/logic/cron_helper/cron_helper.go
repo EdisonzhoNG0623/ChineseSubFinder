@@ -1,7 +1,6 @@
 package cron_helper
 
 import (
-	"fmt"
 	"github.com/ChineseSubFinder/ChineseSubFinder/internal/dao"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/file_downloader"
@@ -34,6 +33,7 @@ type CronHelper struct {
 	entryIDSupplierCheck      cron.EntryID                                             // 检查字幕源有效性的定时器的 ID
 	entryIDQueueDownloader    cron.EntryID                                             // 下载队列的定时器的 ID
 	entryIDFeedBack           cron.EntryID                                             // 信息反馈
+	queueDispatcher           *queueDispatcher                                         // 按 NextWakeAt/队列变更唤醒下载
 	//entryIDScanPlayedVideoSubInfo cron.EntryID
 	//entryIDUploadPlayedVideoSub cron.EntryID
 }
@@ -147,9 +147,11 @@ func (ch *CronHelper) Start(runImmediately bool) {
 	if err != nil {
 		ch.Logger.Panicln("CronHelper SupplierCheck, SupplierCheck Cron entryID:", ch.entryIDSupplierCheck, "Error:", err)
 	}
-	// 这个可以由 Downloader.Cancel() 取消执行
-	queueInterval := fmt.Sprintf("@every %ds", settings.Get().AdvancedSettings.TaskQueue.Interval)
-	ch.entryIDQueueDownloader, err = ch.c.AddFunc(queueInterval, nowDownloader.QueueDownloader)
+	// 事件 dispatcher 负责即时和到期任务；cron 只保留低频维护/容灾兜底。
+	ch.entryIDQueueDownloader, err = ch.c.AddFunc(queueFallbackCronSpec, func() {
+		ch.DownloadQueue.RunMaintenance()
+		nowDownloader.QueueDownloader()
+	})
 	if err != nil {
 		ch.Logger.Panicln("CronHelper QueueDownloader, QueueDownloader Cron entryID:", ch.entryIDQueueDownloader, "Error:", err)
 	}
@@ -197,6 +199,11 @@ func (ch *CronHelper) Start(runImmediately bool) {
 	// 如果不是立即执行，那么就等待定时器开启
 	ch.cronLock.Lock()
 	if ch.cronHelperRunning == true && ch.stopping == false {
+		ch.DownloadQueue.NotifySettingsChanged()
+		if ch.queueDispatcher == nil {
+			ch.queueDispatcher = &queueDispatcher{}
+		}
+		ch.queueDispatcher.start(ch.DownloadQueue, nowDownloader.TryQueueDownloader)
 		ch.cronLock.Unlock()
 		//----------------------------------------------
 		ch.Logger.Infoln("CronHelper Start...")
@@ -231,7 +238,12 @@ func (ch *CronHelper) Stop() {
 	nowCron := ch.c
 	nowScanner := ch.videoScanAndRefreshHelper
 	nowDownloader := ch.downloader
+	nowDispatcher := ch.queueDispatcher
 	ch.cronLock.Unlock()
+
+	if nowDispatcher != nil {
+		nowDispatcher.stop()
+	}
 
 	if nowScanner != nil {
 		nowScanner.Cancel()

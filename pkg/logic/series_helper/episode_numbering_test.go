@@ -204,3 +204,16 @@ func TestDetectAnimeSeriesUsesResolverMetadata(t *testing.T) {
 		t.Fatalf("ordinary metadata match = %t, %v", matched, err)
 	}
 }
+
+func TestHasAnimeLookupIdentityRequiresSearchableMetadata(t *testing.T) {
+	if hasAnimeLookupIdentity(nil) || hasAnimeLookupIdentity(&series.SeriesInfo{Aliases: []string{"  "}}) {
+		t.Fatal("empty metadata was considered searchable")
+	}
+	for _, info := range []*series.SeriesInfo{
+		{Name: "Example"}, {ImdbId: "tt123"}, {TmdbId: "42"}, {TvdbId: "7"}, {Aliases: []string{"Alias"}},
+	} {
+		if !hasAnimeLookupIdentity(info) {
+			t.Fatalf("searchable metadata was ignored: %+v", info)
+		}
+	}
+}

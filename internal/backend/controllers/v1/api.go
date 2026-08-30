@@ -67,6 +67,7 @@ func (cb *ControllerBase) AddJobHandler(c *gin.Context) {
 		nowJob.Season = epsVideoNfoInfo.Season
 		nowJob.Episode = epsVideoNfoInfo.Episode
 		nowJob.SeriesRootDirPath = seriesInfoDirPath
+		nowJob.RefreshSearchFingerprint()
 	}
 
 	bok, err := cb.cronHelper.DownloadQueue.Add(*nowJob)

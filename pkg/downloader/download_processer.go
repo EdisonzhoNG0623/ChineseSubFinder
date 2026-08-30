@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/mix_media_info"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
@@ -33,8 +34,11 @@ func (d *Downloader) movieDlFunc(ctx context.Context, job taskQueue2.OneJob, dow
 
 	// 字幕都下载缓存好了，需要抉择存哪一个，优先选择中文双语的，然后到中文
 	organizeSubFiles, err := nowSubSupplierHub.DownloadSub4MovieContext(ctx, job.VideoFPath, downloadIndex)
+	if d.ctx != nil && d.ctx.Err() != nil {
+		return d.ctx.Err()
+	}
 	if err != nil {
-		err = errors.New(fmt.Sprintf("subSupplierHub.DownloadSub4Movie: %v, %v", job.VideoFPath, err))
+		err = fmt.Errorf("subSupplierHub.DownloadSub4Movie %s: %w", job.VideoFPath, err)
 		d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
 		return err
 	}
@@ -45,14 +49,23 @@ func (d *Downloader) movieDlFunc(ctx context.Context, job taskQueue2.OneJob, dow
 		return nil
 	}
 	if err = ctx.Err(); err != nil {
+		if d.ctx != nil && d.ctx.Err() != nil {
+			return d.ctx.Err()
+		}
 		d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
 		return err
 	}
 
-	err = d.oneVideoSelectBestSub(job.VideoFPath, organizeSubFiles)
+	err = d.oneVideoSelectBestSubForCohort(job.VideoFPath, organizeSubFiles, supplierMetricsCohort(job.VideoType))
 	if err != nil {
+		if d.ctx != nil && d.ctx.Err() != nil {
+			return d.ctx.Err()
+		}
 		d.downloadQueue.AutoDetectUpdateJobStatus(job, err)
 		return err
+	}
+	if d.ctx != nil && d.ctx.Err() != nil {
+		return d.ctx.Err()
 	}
 
 	d.downloadQueue.AutoDetectUpdateJobStatus(job, nil)
@@ -149,12 +162,25 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 	}
 	batchJobs = activeBatch
 	seriesInfo.PrimaryEpisodeKey = primaryEpisodeKey
+	if len(seriesInfo.EpList) > 0 {
+		mediaInfo, mediaInfoErr := mix_media_info.GetMixMediaInfo(
+			d.fileDownloader.MediaInfoDealers, seriesInfo.EpList[0].FileFullPath, false)
+		if mediaInfoErr != nil {
+			d.log.WithError(mediaInfoErr).WithField("event", "series_search_aliases_degraded").Warn(
+				"remote series titles unavailable; continuing with local aliases")
+		} else {
+			mergeSeriesSearchAliases(seriesInfo, mediaInfo.TitleCn, mediaInfo.TitleEn, mediaInfo.OriginalTitle)
+		}
+	}
 	// 下载好的字幕文件
 	var organizeSubFiles map[string][]string
 	// 下载的接口是统一的
 	organizeSubFiles, err = nowSubSupplierHub.DownloadSub4SeriesContext(ctx, job.SeriesRootDirPath,
 		seriesInfo,
 		downloadIndex)
+	if d.ctx != nil && d.ctx.Err() != nil {
+		return d.ctx.Err()
+	}
 	// DownloadSub4Series enriches alternate anime numbering before suppliers
 	// run. Persist that identity with each batched queue outcome.
 	identities := make(map[string]seriesIdentity, len(seriesInfo.NeedDlEpsKeyList))
@@ -166,11 +192,12 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 			numberingSource:     episode.NumberingSource,
 			numberingConfidence: episode.NumberingConfidence,
 			seriesName:          seriesInfo.Name,
+			aliases:             append([]string(nil), seriesInfo.Aliases...),
 		}
 	}
 	batchJobs = enrichSeriesBatchJobs(batchJobs, identities)
 	if err != nil {
-		err = errors.New(fmt.Sprintf("seriesDlFunc.DownloadSub4Series %v S%vE%v %v", filepath.Base(job.SeriesRootDirPath), job.Season, job.Episode, err))
+		err = fmt.Errorf("seriesDlFunc.DownloadSub4Series %v S%vE%v: %w", filepath.Base(job.SeriesRootDirPath), job.Season, job.Episode, err)
 		d.completeSeriesBatch(batchJobs, nil, nil, err)
 		return err
 	}
@@ -186,7 +213,9 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 	// 只针对需要下载字幕的视频进行字幕的选择保存
 	for epsKey, episodeInfo := range seriesInfo.NeedDlEpsKeyList {
 		saveErr := runSubtitleSaveWithContext(ctx, func() error {
-			return d.oneVideoSelectBestSub(episodeInfo.FileFullPath, organizeSubFiles[epsKey])
+			return d.oneVideoSelectBestSubForCohort(
+				episodeInfo.FileFullPath, organizeSubFiles[epsKey], supplierMetricsCohort(job.VideoType),
+			)
 		})
 		if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) {
 			err = fmt.Errorf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d: %w",
@@ -236,7 +265,9 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 		}
 
 		saveErr := runSubtitleSaveWithContext(ctx, func() error {
-			return d.oneVideoSelectBestSub(episodeInfo.FileFullPath, fullSeasonSubs)
+			return d.oneVideoSelectBestSubForCohort(
+				episodeInfo.FileFullPath, fullSeasonSubs, supplierMetricsCohort(job.VideoType),
+			)
 		})
 		if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) {
 			err = fmt.Errorf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d: %w",

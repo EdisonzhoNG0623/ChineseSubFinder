@@ -1,6 +1,7 @@
 package task_queue
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -36,6 +37,11 @@ func TestMarkSeriesEpisodesDoneBatchesOnlySavedEpisodes(t *testing.T) {
 			t.Fatalf("Add(%s) = %v, %v", job.Id, added, err)
 		}
 	}
+	initialRevisions := make(map[string]uint64, len(jobs))
+	for _, job := range jobs {
+		_, stored := queue.GetOneJobByID(job.Id)
+		initialRevisions[job.Id] = stored.StateRevision
+	}
 	seriesJobs := queue.GetSeriesJobs(seriesRoot)
 	if len(seriesJobs) != len(jobs) {
 		t.Fatalf("GetSeriesJobs returned %d jobs, want %d", len(seriesJobs), len(jobs))
@@ -63,6 +69,9 @@ func TestMarkSeriesEpisodesDoneBatchesOnlySavedEpisodes(t *testing.T) {
 		if !found || job.JobStatus != taskQueue2.Done || job.TaskPriority != DefaultTaskPriorityLevel {
 			t.Fatalf("backfilled job %s not completed: %+v", id, job)
 		}
+		if job.StateRevision != nextStateRevision(initialRevisions[id]) {
+			t.Fatalf("backfilled job %s revision = %d, want %d", id, job.StateRevision, nextStateRevision(initialRevisions[id]))
+		}
 		if job.RetryTimes != 0 || job.ErrorInfo != "" || job.ForceRun || !time.Time(job.NextAttemptTime).IsZero() {
 			t.Fatalf("backfilled job %s retained retry state: %+v", id, job)
 		}
@@ -72,6 +81,43 @@ func TestMarkSeriesEpisodesDoneBatchesOnlySavedEpisodes(t *testing.T) {
 		if job.JobStatus != taskQueue2.Waiting {
 			t.Fatalf("unrelated/excluded job %s changed: %+v", id, job)
 		}
+		if job.StateRevision != initialRevisions[id] {
+			t.Fatalf("unrelated/excluded job %s revision changed: %d -> %d", id, initialRevisions[id], job.StateRevision)
+		}
+	}
+}
+
+func TestMarkSeriesEpisodesDonePersistenceFailureTracksDirtySnapshots(t *testing.T) {
+	const queueName = "task_queue_collection_backfill_dirty_test"
+	cache_center.DelDb(queueName)
+	t.Cleanup(func() { cache_center.DelDb(queueName) })
+	queue := NewTaskQueue(cache_center.NewCacheCenter(queueName, log_helper.GetLogger4Tester()))
+	t.Cleanup(queue.Close)
+
+	seriesRoot := "/media/backfill-dirty"
+	job := collectionQueueJob("episode-dirty", seriesRoot, 1, taskQueue2.Waiting, FirstRetryTaskPriorityLevel)
+	if added, err := queue.Add(job); err != nil || !added {
+		t.Fatalf("Add() = %v, %v", added, err)
+	}
+	originalPersist := queue.persistPriority
+	queue.persistPriority = func(int, []byte) error { return errors.New("injected backfill write failure") }
+	marked, err := queue.MarkSeriesEpisodesDone(seriesRoot, map[string]struct{}{pkg.GetEpisodeKeyName(1, 1): {}}, "")
+	if err == nil || marked != 1 {
+		t.Fatalf("MarkSeriesEpisodesDone() = %d, %v", marked, err)
+	}
+	_, current := queue.GetOneJobByID(job.Id)
+	if current.JobStatus != taskQueue2.Done || current.TaskPriority != DefaultTaskPriorityLevel {
+		t.Fatalf("failed persistence lost authoritative in-memory transition: %+v", current)
+	}
+	if len(queue.dirtyPriorities) != 2 {
+		t.Fatalf("failed backfill did not track both snapshots: %v", queue.dirtyPriorities)
+	}
+	queue.persistPriority = originalPersist
+	if err = queue.FlushDirtyPriorities(); err != nil {
+		t.Fatalf("FlushDirtyPriorities() = %v", err)
+	}
+	if len(queue.dirtyPriorities) != 0 {
+		t.Fatalf("dirty snapshots survived retry: %v", queue.dirtyPriorities)
 	}
 }
 

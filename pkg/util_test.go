@@ -1,23 +1,27 @@
 package pkg
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/log_helper"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/unit_test_helper"
+	"github.com/sirupsen/logrus"
 )
 
 func TestCloseChrome(t *testing.T) {
 
 	// BUG: will produce Logs under this dir
-	CloseChrome(log_helper.GetLogger4Tester())
+	CloseChrome(logrus.New())
 }
 
 func TestFileNameIsBDMV(t *testing.T) {
 
 	rootDir := unit_test_helper.GetTestDataResourceRootPath([]string{"movies", "失控玩家 (2021)"}, 4, false)
 	dbmvFPath := filepath.Join(rootDir, "CERTIFICATE", "id.bdmv")
+	if _, err := os.Stat(dbmvFPath); err != nil {
+		t.Skipf("external ChineseSubFinder-TestData fixture unavailable: %v", err)
+	}
 	bok, fakeVideoFPath := FileNameIsBDMV(dbmvFPath)
 	if bok == false {
 		t.Fatal("FileNameIsBDMV error")
