@@ -43,6 +43,8 @@ const (
 	maxDecompressedSize = 5 << 20
 	maxSearchItems      = 150
 	maxDetailRequests   = 24
+	maxRequestAttempts  = 3
+	retryBaseDelay      = 500 * time.Millisecond
 	providerUserAgent   = "ChineseSubFinder-AnimeTosho/1.0"
 )
 
@@ -54,6 +56,7 @@ type Supplier struct {
 	baseURL           string
 	attachmentBaseURL string
 	lastRequestAt     time.Time
+	httpClientFactory func(time.Duration, string) (*http.Client, error)
 }
 
 func NewSupplier(downloader *file_downloader.FileDownloader) *Supplier {
@@ -238,18 +241,6 @@ func (s *Supplier) detail(ctx context.Context, id int64) (*detailResponse, error
 	if detail.ID == 0 {
 		detail.ID = id
 	}
-	if len(detail.Files) > 100 {
-		return nil, errors.New("AnimeTosho detail exceeds safety limits")
-	}
-	for _, file := range detail.Files {
-		if len(file.Attachments) > 200 || len(detail.Attachments)+len(file.Attachments) > 500 {
-			return nil, errors.New("AnimeTosho detail exceeds safety limits")
-		}
-		for _, attachment := range file.Attachments {
-			attachment.SourceFilename = firstNonEmpty(file.Filename, file.Name, file.Path)
-			detail.Attachments = append(detail.Attachments, attachment)
-		}
-	}
 	return &detail, nil
 }
 
@@ -268,22 +259,9 @@ func (s *Supplier) searchEndpoint(values url.Values) string {
 }
 
 func (s *Supplier) getJSON(ctx context.Context, endpoint string, out interface{}) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return errors.New("create AnimeTosho request failed")
-	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", providerUserAgent)
-	if err = s.waitRateLimit(ctx); err != nil {
-		return err
-	}
-	client, err := s.httpClient(requestTimeout, endpoint)
+	response, err := s.doRequest(ctx, endpoint, requestTimeout, "application/json", "AnimeTosho")
 	if err != nil {
 		return err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return errors.New("AnimeTosho request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -340,21 +318,9 @@ func (s *Supplier) attachmentURL(detail *detailResponse, item feedItem, attachme
 }
 
 func (s *Supplier) downloadAttachment(ctx context.Context, endpoint string, attachment attachmentInfo) ([]byte, string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, "", errors.New("create AnimeTosho attachment request failed")
-	}
-	request.Header.Set("User-Agent", providerUserAgent)
-	if err = s.waitRateLimit(ctx); err != nil {
-		return nil, "", err
-	}
-	client, err := s.httpClient(downloadTimeout, endpoint)
+	response, err := s.doRequest(ctx, endpoint, downloadTimeout, "application/octet-stream", "AnimeTosho attachment")
 	if err != nil {
 		return nil, "", err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, "", errors.New("AnimeTosho attachment request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -396,6 +362,9 @@ func decompressAttachment(compressed []byte) ([]byte, error) {
 }
 
 func (s *Supplier) httpClient(timeout time.Duration, endpoint string) (*http.Client, error) {
+	if s.httpClientFactory != nil {
+		return s.httpClientFactory(timeout, endpoint)
+	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
 		return nil, errors.New("AnimeTosho endpoint must use HTTPS")
@@ -413,12 +382,84 @@ func (s *Supplier) httpClient(timeout time.Duration, endpoint string) (*http.Cli
 		Transport: transport,
 		Timeout:   timeout,
 		CheckRedirect: func(request *http.Request, _ []*http.Request) error {
-			if request.URL.Scheme != "https" || request.URL.User != nil || !strings.EqualFold(request.URL.Host, allowedAuthority) {
+			if !animeToshoRedirectAllowed(parsed, request.URL, allowedAuthority) {
 				return errors.New("AnimeTosho redirect target is not allowed")
 			}
 			return nil
 		},
 	}, nil
+}
+
+func (s *Supplier) doRequest(ctx context.Context, endpoint string, timeout time.Duration, accept, operation string) (*http.Response, error) {
+	client, err := s.httpClient(timeout, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for attempt := 0; attempt < maxRequestAttempts; attempt++ {
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if requestErr != nil {
+			return nil, fmt.Errorf("create %s request failed", operation)
+		}
+		request.Header.Set("Accept", accept)
+		request.Header.Set("User-Agent", providerUserAgent)
+		if requestErr = s.waitRateLimit(ctx); requestErr != nil {
+			return nil, requestErr
+		}
+		response, requestErr := client.Do(request)
+		if requestErr == nil && (!retryableHTTPStatus(response.StatusCode) || attempt == maxRequestAttempts-1) {
+			return response, nil
+		}
+		if response != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8<<10))
+			_ = response.Body.Close()
+		}
+		if requestErr != nil {
+			lastErr = fmt.Errorf("%s request failed", operation)
+		} else {
+			lastErr = fmt.Errorf("%s returned HTTP %d", operation, response.StatusCode)
+		}
+		if attempt < maxRequestAttempts-1 {
+			if err = waitRetry(ctx, retryBaseDelay*time.Duration(1<<attempt)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return nil, lastErr
+}
+
+func retryableHTTPStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooEarly,
+		http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func animeToshoRedirectAllowed(origin, target *url.URL, allowedAuthority string) bool {
+	if target == nil || target.Scheme != "https" || target.User != nil || target.Hostname() == "" {
+		return false
+	}
+	if strings.EqualFold(target.Host, allowedAuthority) {
+		return true
+	}
+	return origin != nil && strings.EqualFold(origin.Hostname(), "animetosho.org") &&
+		(origin.Port() == "" || origin.Port() == "443") &&
+		strings.EqualFold(target.Hostname(), "storage.animetosho.org") &&
+		(target.Port() == "" || target.Port() == "443")
 }
 
 func (s *Supplier) waitRateLimit(ctx context.Context) error {
@@ -502,6 +543,7 @@ func matchesEpisode(name string, episode series.EpisodeInfo) bool {
 
 func selectChineseAttachments(items []attachmentInfo) []attachmentInfo {
 	out := make([]attachmentInfo, 0)
+	seen := make(map[int64]struct{})
 	for _, item := range items {
 		if item.ID <= 0 || !strings.EqualFold(item.Type, "subtitle") || item.Info.TrackNum <= 0 || item.Size > maxDecompressedSize {
 			continue
@@ -509,6 +551,10 @@ func selectChineseAttachments(items []attachmentInfo) []attachmentInfo {
 		if !isChineseCode(item.Info.Lang) || !supportedCodec(strings.ToLower(strings.TrimSpace(item.Info.Codec))) {
 			continue
 		}
+		if _, exists := seen[item.ID]; exists {
+			continue
+		}
+		seen[item.ID] = struct{}{}
 		out = append(out, item)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -518,17 +564,26 @@ func selectChineseAttachments(items []attachmentInfo) []attachmentInfo {
 }
 
 func selectEpisodeAttachments(detail *detailResponse, episode series.EpisodeInfo) []attachmentInfo {
-	items := selectChineseAttachments(detail.Attachments)
-	if len(detail.Files) <= 1 {
-		return items
+	if detail == nil {
+		return nil
 	}
-	out := make([]attachmentInfo, 0, len(items))
-	for _, item := range items {
-		if matchesEpisode(item.SourceFilename, episode) {
-			out = append(out, item)
+	items := make([]attachmentInfo, 0, len(detail.Attachments))
+	for _, attachment := range detail.Attachments {
+		if len(detail.Files) <= 1 || (attachment.SourceFilename != "" && matchesEpisode(attachment.SourceFilename, episode)) {
+			items = append(items, attachment)
 		}
 	}
-	return out
+	for _, file := range detail.Files {
+		sourceFilename := firstNonEmpty(file.Filename, file.Name, file.Path)
+		if len(detail.Files) > 1 && !matchesEpisode(sourceFilename, episode) {
+			continue
+		}
+		for _, attachment := range file.Attachments {
+			attachment.SourceFilename = sourceFilename
+			items = append(items, attachment)
+		}
+	}
+	return selectChineseAttachments(items)
 }
 
 func attachmentPriority(item attachmentInfo) int {
