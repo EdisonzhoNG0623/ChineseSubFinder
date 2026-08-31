@@ -65,7 +65,7 @@ type Downloader struct {
 	queueLogLock             sync.Mutex
 	queueLogActive           int
 	queueLogBatchID          string
-	queueDownloadCounter     atomic.Int64
+	queueDownloadCounter     int64
 	seriesWorkerLocks        sync.Map
 	downloadQueue            *task_queue.TaskQueue                            // 需要下载的视频的队列
 	embyHelper               *embyHelper.EmbyHelper                           // Emby 的实例

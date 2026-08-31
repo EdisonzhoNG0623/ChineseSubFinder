@@ -19,12 +19,16 @@ func TestResolveMaskedSecretRequiresAuthentication(t *testing.T) {
 		t.Fatal("masked credential should require authentication")
 	}
 
-	recorder := httptest.NewRecorder()
-	authorizedContext, _ := gin.CreateTestContext(recorder)
-	authorizedContext.Request = httptest.NewRequest("POST", "/check", nil)
-	authorizedContext.Request.Header.Set("Authorization", "Bearer test-access-token")
-	value, ok := resolveMaskedSecret(authorizedContext, "******", "real-secret")
-	if !ok || value != "real-secret" {
-		t.Fatalf("masked credential was not restored: value=%q ok=%v", value, ok)
+	for _, authorization := range []string{"Bearer test-access-token", "Token test-access-token"} {
+		t.Run(authorization, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			authorizedContext, _ := gin.CreateTestContext(recorder)
+			authorizedContext.Request = httptest.NewRequest("POST", "/check", nil)
+			authorizedContext.Request.Header.Set("Authorization", authorization)
+			value, ok := resolveMaskedSecret(authorizedContext, "******", "real-secret")
+			if !ok || value != "real-secret" {
+				t.Fatalf("masked credential was not restored: value=%q ok=%v", value, ok)
+			}
+		})
 	}
 }

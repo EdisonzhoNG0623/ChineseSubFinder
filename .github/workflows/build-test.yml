@@ -21,21 +21,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Install Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.golang }}
-      - name: Cache Dependencies
-        uses: actions/cache@v2
-        with:
-          path: ~/go/pkg/mod # not sure if this part needs editing
-          key: ${{ runner.os }}-go-${{ matrix.golang }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ matrix.golang }}-
+          go-version: ${{ matrix.go-version }}
+          cache: true
+      - name: Compile P0-P2 core packages
+        if: runner.os == 'Linux'
+        run: go test -run '^$' ./internal/backend/... ./pkg/downloader ./pkg/save_sub_helper ./pkg/task_queue
       - name: Test
-        # only test gss for now
-        # go test ./... for all
-        # after the testdata problems resolved
-        # TODO: add makefile for testing
-        run: go test ./internal/pkg/gss/
+        run: go test ./pkg/gss/

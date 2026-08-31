@@ -175,7 +175,6 @@ import { computed, ref, watch } from 'vue';
 import LibraryApi from 'src/api/LibraryApi';
 import { SystemMessage } from 'src/utils/message';
 import { VIDEO_TYPE_TV } from 'src/constants/SettingConstants';
-import config from 'src/config';
 import { useQuasar } from 'quasar';
 import { useSelection } from 'src/composables/use-selection';
 import BtnIgnoreVideo from 'pages/library/BtnIgnoreVideo';
@@ -184,7 +183,7 @@ import BtnUploadSubtitle from 'pages/library/BtnUploadSubtitle';
 import BtnDialogPreviewVideo from 'pages/library/BtnDialogPreviewVideo';
 import BtnDialogSearchSubtitle from 'pages/library/BtnDialogSearchSubtitle';
 import BtnUploadMultipleForTv from 'pages/library/tvs/BtnUploadMultipleForTv';
-import { doFixSubtitleTimeline } from 'pages/library/use-library';
+import { doFixSubtitleTimeline, getUrl } from 'pages/library/use-library';
 import { formModel } from 'pages/settings/use-settings';
 
 const props = defineProps({
@@ -238,8 +237,6 @@ const pandStart2 = (num) => {
 };
 
 const visible = ref(false);
-
-const getUrl = (path) => config.BACKEND_URL + path.split(/\/|\\/).join('/');
 
 const downloadSubtitle = async (items) => {
   const downloadList = items instanceof Array ? items : [items];

@@ -24,6 +24,8 @@ import (
 
 var errDownloadingPriorityChange = errors.New("cannot change priority while a job is downloading; reset or ignore it first")
 
+const maxJobLogIDLength = 128
+
 func (cb *ControllerBase) JobsListHandler(c *gin.Context) {
 	var err error
 	defer func() {
@@ -64,6 +66,7 @@ func (cb *ControllerBase) ChangeJobStatusHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, backend2.ReplyCommon{Message: "job not found"})
 		return
 	}
+	expectedRevision := nowOneJob.StateRevision
 
 	changed, err := applyRequestedJobChanges(&nowOneJob, desJobStatus)
 	if err != nil {
@@ -79,7 +82,7 @@ func (cb *ControllerBase) ChangeJobStatusHandler(c *gin.Context) {
 		return
 	}
 
-	bok, err = cb.cronHelper.DownloadQueue.Update(nowOneJob)
+	bok, err = cb.cronHelper.DownloadQueue.UpdateIfRevision(nowOneJob, expectedRevision)
 	if err != nil {
 		cb.log.Errorln("ChangeJobStatusHandler", err)
 		c.JSON(http.StatusInternalServerError, backend2.ReplyCommon{Message: err.Error()})
@@ -165,7 +168,11 @@ func (cb *ControllerBase) JobLogHandler(c *gin.Context) {
 	}
 
 	pathRoot := filepath.Join(pkg.ConfigRootDirFPath(), "Logs")
-	fileFPath := filepath.Join(pathRoot, common.OnceLogPrefix+reqJobLog.Id+".log")
+	fileFPath, validJobID := jobLogFilePath(pathRoot, reqJobLog.Id)
+	if !validJobID {
+		c.JSON(http.StatusBadRequest, backend2.ReplyCommon{Message: "invalid job id"})
+		return
+	}
 	if pkg.IsFile(fileFPath) == true {
 		// 存在
 		// 一行一行的读取文件
@@ -195,4 +202,26 @@ func (cb *ControllerBase) JobLogHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, backend2.ReplyCommon{Message: "job log not found"})
 		return
 	}
+}
+
+func jobLogFilePath(pathRoot, jobID string) (string, bool) {
+	if jobID == "" || len(jobID) > maxJobLogIDLength {
+		return "", false
+	}
+	for i := 0; i < len(jobID); i++ {
+		char := jobID[i]
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return "", false
+	}
+
+	cleanRoot := filepath.Clean(pathRoot)
+	filePath := filepath.Join(cleanRoot, common.OnceLogPrefix+jobID+".log")
+	relativePath, err := filepath.Rel(cleanRoot, filePath)
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filePath, true
 }

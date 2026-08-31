@@ -1,5 +1,8 @@
 name: release
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
@@ -13,31 +16,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup npm
-        uses: bahmutov/npm-install@v1
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          working-directory: frontend
+          node-version: 20.19.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
 
       - name: Frontend Build
         run: npm run build
         working-directory: frontend
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
           go-version: 1.17
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v2
+        uses: goreleaser/goreleaser-action@v7
         with:
           # either 'goreleaser' (default) or 'goreleaser-pro'
           distribution: goreleaser
-          version: latest
-          args: release -f .goreleaser-ChineseSubFinder.yml --rm-dist
+          version: "~> v2"
+          args: release -f .goreleaser-ChineseSubFinder.yml --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
           BASEKEY: ${{ secrets.BASEKEY }}

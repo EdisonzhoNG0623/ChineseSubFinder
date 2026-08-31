@@ -3,17 +3,20 @@
 </template>
 
 <script setup>
-import {markdown} from 'markdown';
-import {computed, defineProps} from 'vue';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
+import { computed, defineProps } from 'vue';
 
 const props = defineProps({
   source: {
     type: String,
-    required: true
+    required: true,
   },
 });
 
-const html = computed(() => markdown.toHTML(props.source));
+// Release notes are fetched from a remote API and are therefore untrusted.
+// Parse Markdown first, then sanitize the resulting DOM before v-html renders it.
+const html = computed(() => DOMPurify.sanitize(marked.parse(props.source), { USE_PROFILES: { html: true } }));
 </script>
 
 <style scoped>

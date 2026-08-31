@@ -12,9 +12,9 @@ import (
 )
 
 func TestDownFileWithTimeoutDoesNotRestartSlowDownload(t *testing.T) {
-	var requests atomic.Int32
+	var requests int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requests.Add(1)
+		atomic.AddInt32(&requests, 1)
 		writer.Header().Set("Content-Disposition", `attachment; filename="slow.ass"`)
 		writer.WriteHeader(http.StatusOK)
 		if flusher, ok := writer.(http.Flusher); ok {
@@ -29,7 +29,7 @@ func TestDownFileWithTimeoutDoesNotRestartSlowDownload(t *testing.T) {
 	if err == nil {
 		t.Fatal("DownFileWithTimeout() error = nil, want timeout")
 	}
-	if got := requests.Load(); got != 1 {
+	if got := atomic.LoadInt32(&requests); got != 1 {
 		t.Fatalf("requests = %d, want exactly one non-restarted download", got)
 	}
 }

@@ -26,12 +26,7 @@ class LibraryApi extends BaseApi {
 
   getSubtitleQueueStatus = (data) => this.http(`/v1/subtitles/is_manual_upload_2_local_in_queue`, data, 'POST');
 
-  uploadSubtitle = (data) =>
-    this.http(`/v1/subtitles/manual_upload_2_local`, data, 'POST', {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
+  uploadSubtitle = (data) => this.http(`/v1/subtitles/manual_upload_2_local`, data, 'POST');
 
   refreshMediaServerSubList = () => this.http(`/v1/subtitles/refresh_media_server_sub_list`, {}, 'POST');
 

@@ -337,6 +337,21 @@ func (t *TaskQueue) Update(oneJob task_queue2.OneJob) (bool, error) {
 	return t.update(oneJob)
 }
 
+// UpdateIfRevision applies a read-modify-write update only while the stored
+// job is still the generation the caller read. Queue workers advance the
+// revision when claiming or completing a job, so a stale UI/API snapshot must
+// not cancel a newer claim or overwrite its outcome.
+func (t *TaskQueue) UpdateIfRevision(oneJob task_queue2.OneJob, expectedRevision uint64) (bool, error) {
+	defer t.queueLock.Unlock()
+	t.queueLock.Lock()
+
+	stored, found := t.jobByIDLocked(oneJob.Id)
+	if !found || stored.StateRevision != expectedRevision {
+		return false, nil
+	}
+	return t.update(oneJob)
+}
+
 // AutoDetectUpdateJobStatus 根据任务的生命周期图，进行自动判断更新，见《任务的生命周期》流程图
 func (t *TaskQueue) AutoDetectUpdateJobStatus(oneJob task_queue2.OneJob, inErr error) error {
 	if err := t.ApplyOutcomesReliable([]JobOutcome{{Job: oneJob, Err: inErr}}); err != nil {

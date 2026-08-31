@@ -11,12 +11,12 @@ import (
 )
 
 type cooldownTestSupplier struct {
-	checks atomic.Int32
+	checks int32
 	log    *logrus.Logger
 }
 
 func (s *cooldownTestSupplier) CheckAlive() (bool, int64) {
-	s.checks.Add(1)
+	atomic.AddInt32(&s.checks, 1)
 	return true, 1
 }
 func (s *cooldownTestSupplier) IsAlive() bool                { return true }
@@ -46,7 +46,7 @@ func TestCheckSubSiteStatusRemovesSupplierDuringCooldown(t *testing.T) {
 	fake := &cooldownTestSupplier{log: logrus.New()}
 	hub := NewSubSupplierHub(fake)
 	status := hub.CheckSubSiteStatus()
-	if fake.checks.Load() != 0 {
+	if atomic.LoadInt32(&fake.checks) != 0 {
 		t.Fatal("supplier health endpoint was called during cooldown")
 	}
 	if len(hub.Suppliers) != 0 {

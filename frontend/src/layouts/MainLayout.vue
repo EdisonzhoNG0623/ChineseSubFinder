@@ -47,7 +47,7 @@
           >
             <q-list padding style="min-width: 160px">
               <q-item-label header>当前账号</q-item-label>
-              <q-item clickable v-close-popup @click="logout">
+              <q-item clickable v-close-popup :disable="loggingOut" @click="logout">
                 <q-item-section avatar><q-icon name="logout" /></q-item-section>
                 <q-item-section>退出登录</q-item-section>
               </q-item>
@@ -97,20 +97,30 @@ import BugReportItem from 'layouts/BugReportItem';
 import VersionUpdateItem from 'components/VersionUpdateItem';
 import NoticeDialog from 'components/NoticeDialog';
 import AccessApi from 'src/api/AccessApi';
+import { SystemMessage } from 'src/utils/message';
 import { isJobRunning, systemState } from 'src/store/systemState';
 import { userState } from 'src/store/userState';
 
 const router = useRouter();
 const leftDrawerOpen = ref(false);
+const loggingOut = ref(false);
 const menus = routes.find((route) => route.path === '/').children;
 const helpUrl = 'https://github.com/ChineseSubFinder/ChineseSubFinder/blob/master/docker/readme.md';
 
-const logout = () => {
+const logout = async () => {
+  if (loggingOut.value) return;
+  loggingOut.value = true;
+  const [, err] = await AccessApi.logout();
+  loggingOut.value = false;
+  if (err) {
+    SystemMessage.error(err.message || '退出登录失败，请重试');
+    return;
+  }
   userState.username = '';
   userState.accessToken = undefined;
+  userState.resourceTicket = undefined;
   LocalStorage.remove('token');
-  AccessApi.logout();
-  router.push('/access/login');
+  await router.push('/access/login');
 };
 
 const openPage = (url) => window.open(url, '_blank', 'noopener,noreferrer');

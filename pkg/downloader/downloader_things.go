@@ -7,13 +7,13 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/save_sub_helper"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/series"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/subparser"
 
 	subcommon "github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_formatter/common"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_helper"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/subtitle_metrics"
 )
 
@@ -44,6 +44,30 @@ func (d *Downloader) oneVideoSelectBestSubForCohort(oneVideoFullPath string, org
 	if organizeSubFiles == nil || len(organizeSubFiles) < 1 {
 		return common.AllSiteDownloadSubNotFound
 	}
+	if d.SaveSubHelper == nil {
+		return errors.New("subtitle save helper is not initialized")
+	}
+	return d.SaveSubHelper.WithVideoWriteLock(oneVideoFullPath, func(writer *save_sub_helper.VideoWriteTransaction) error {
+		return d.oneVideoSelectBestSubForCohortLocked(oneVideoFullPath, organizeSubFiles, cohort, writer)
+	})
+}
+
+func (d *Downloader) oneVideoSelectBestSubForCohortLocked(oneVideoFullPath string, organizeSubFiles []string,
+	cohort subtitle_metrics.MediaCohort, writer *save_sub_helper.VideoWriteTransaction) error {
+
+	// Manual upload persists its skip marker before releasing this video's write
+	// transaction. Re-check after lock admission so an already-running automatic
+	// search cannot overwrite a manual subtitle that finished while it waited.
+	if d.ScanLogic != nil && cohort != subtitle_metrics.CohortUnknown {
+		videoType := 1
+		if cohort == subtitle_metrics.CohortMovie {
+			videoType = 0
+		}
+		if d.ScanLogic.Get(videoType, oneVideoFullPath) {
+			d.log.Infoln("Automatic subtitle save skipped after manual override:", oneVideoFullPath)
+			return nil
+		}
+	}
 
 	var err error
 	// 得到目标视频文件的文件名
@@ -59,17 +83,13 @@ func (d *Downloader) oneVideoSelectBestSubForCohort(oneVideoFullPath string, org
 		}
 	}
 	// -------------------------------------------------
-	/*
-		这里需要额外考虑一点，有可能当前目录已经有一个 .Default .Forced 标记的字幕了
-		那么下载字幕丢进来的时候就需要提前把这个字幕找出来，去除整个 .Default .Forced  标记
-		然后进行正常的下载，存储和替换字幕，最后将本次操作的第一次标记为 .Default
-	*/
-	// 不管是不是保存多个字幕，都要先扫描本地的字幕，进行 .Default .Forced 去除
-	// 这个视频的所有字幕，去除 .default .Forced 标记
-	err = sub_helper.SearchVideoMatchSubFileAndRemoveExtMark(d.log, oneVideoFullPath)
-	if err != nil {
-		// 找个错误可以忍
-		d.log.Errorln("SearchVideoMatchSubFileAndRemoveExtMark,", oneVideoFullPath, err)
+	// Snapshot existing default/forced entries without changing them. They are
+	// demoted only after every requested subtitle has been selected, processed,
+	// and published successfully. This keeps selection and write failures from
+	// changing the previously installed visible state.
+	markerSnapshots, snapshotErr := writer.SnapshotSubtitleMarkers()
+	if snapshotErr != nil {
+		d.log.WithError(snapshotErr).Warnln("snapshot existing subtitle markers", oneVideoFullPath)
 	}
 	if settings.Get().AdvancedSettings.SaveMultiSub == false {
 		// 选择最优的一个字幕
@@ -92,7 +112,7 @@ func (d *Downloader) oneVideoSelectBestSubForCohort(oneVideoFullPath string, org
 			bSetDefault = false
 		}
 		// 找到了，写入文件
-		err = d.SaveSubHelper.WriteSubFile2VideoPath(oneVideoFullPath, *finalSubFile, "", bSetDefault, false)
+		err = writer.WriteSubFile(*finalSubFile, "", bSetDefault, false)
 		if err != nil {
 			return errors.New(fmt.Sprintf("SaveMultiSub: %v, writeSubFile2VideoPath, Error: %v ", settings.Get().AdvancedSettings.SaveMultiSub, err))
 		}
@@ -100,10 +120,14 @@ func (d *Downloader) oneVideoSelectBestSubForCohort(oneVideoFullPath string, org
 	} else {
 		// 每个网站 Top1 的字幕
 		siteNames, finalSubFiles := d.mk.SelectEachSiteTop1SubFile(organizeSubFiles)
-		if len(siteNames) < 0 {
+		if len(siteNames) == 0 || len(finalSubFiles) == 0 {
 			outString := fmt.Sprintln("SelectEachSiteTop1SubFile found none sub file")
 			d.log.Warnln(outString)
 			return errors.New(outString)
+		}
+		if len(siteNames) != len(finalSubFiles) {
+			return fmt.Errorf("SelectEachSiteTop1SubFile returned mismatched results: %d sites, %d subtitles",
+				len(siteNames), len(finalSubFiles))
 		}
 		// 多网站 Top 1 字幕保存的时候，第一个设置为 Default 即可
 		/*
@@ -113,18 +137,26 @@ func (d *Downloader) oneVideoSelectBestSubForCohort(oneVideoFullPath string, org
 			如果是 Emby 的字幕命名格式则无需考虑此问题，因为每个网站只会有一个字幕，且字幕命名格式决定了不会重复写入覆盖
 		*/
 		if d.subNameFormatter == subcommon.Emby {
-			for i, file := range finalSubFiles {
+			// Publish non-default site results first. The authoritative default is
+			// committed last, after every operation that can still fail, so a later
+			// site error cannot replace an existing same-path default with a partial
+			// multi-site result.
+			for i := 1; i < len(finalSubFiles); i++ {
+				file := finalSubFiles[i]
 				subtitle_metrics.RecordSelectionForCohort(file.FromWhereSite, cohort)
-				setDefault := false
-				if i == 0 {
-					setDefault = true
-				}
-				err = d.SaveSubHelper.WriteSubFile2VideoPath(oneVideoFullPath, file, siteNames[i], setDefault, false)
+				err = writer.WriteSubFile(file, siteNames[i], false, false)
 				if err != nil {
 					return errors.New(fmt.Sprintf("SaveMultiSub: %v, writeSubFile2VideoPath, Error: %v ", settings.Get().AdvancedSettings.SaveMultiSub, err))
 				}
 				subtitle_metrics.RecordSaveForCohort(file.FromWhereSite, cohort)
 			}
+			defaultFile := finalSubFiles[0]
+			subtitle_metrics.RecordSelectionForCohort(defaultFile.FromWhereSite, cohort)
+			err = writer.WriteSubFile(defaultFile, siteNames[0], true, false)
+			if err != nil {
+				return errors.New(fmt.Sprintf("SaveMultiSub: %v, writeSubFile2VideoPath, Error: %v ", settings.Get().AdvancedSettings.SaveMultiSub, err))
+			}
+			subtitle_metrics.RecordSaveForCohort(defaultFile.FromWhereSite, cohort)
 		} else {
 			// 默认这里就是 normal 模式
 			// 逆序写入
@@ -135,7 +167,7 @@ func (d *Downloader) oneVideoSelectBestSubForCohort(oneVideoFullPath string, org
 			*/
 			for i := len(finalSubFiles) - 1; i > -1; i-- {
 				subtitle_metrics.RecordSelectionForCohort(finalSubFiles[i].FromWhereSite, cohort)
-				err = d.SaveSubHelper.WriteSubFile2VideoPath(oneVideoFullPath, finalSubFiles[i], siteNames[i], false, false)
+				err = writer.WriteSubFile(finalSubFiles[i], siteNames[i], false, false)
 				if err != nil {
 					return errors.New(fmt.Sprintf("SaveMultiSub: %v, writeSubFile2VideoPath, Error: %v ", settings.Get().AdvancedSettings.SaveMultiSub, err))
 				}
@@ -143,6 +175,7 @@ func (d *Downloader) oneVideoSelectBestSubForCohort(oneVideoFullPath string, org
 			}
 		}
 	}
+	writer.DemoteSubtitleMarkers(markerSnapshots)
 	// -------------------------------------------------
 
 	return nil

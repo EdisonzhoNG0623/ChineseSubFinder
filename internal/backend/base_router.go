@@ -2,7 +2,6 @@ package backend
 
 import (
 	"fmt"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/pre_job"
 	"net/http"
 
 	"github.com/arl/statsviz"
@@ -15,6 +14,7 @@ import (
 	v1 "github.com/ChineseSubFinder/ChineseSubFinder/internal/backend/controllers/v1"
 	"github.com/ChineseSubFinder/ChineseSubFinder/internal/backend/middle"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/cron_helper"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/pre_job"
 	"github.com/gin-gonic/gin"
 )
 
@@ -53,20 +53,20 @@ func InitRouter(
 
 		nowUrl := "/movie_dir_" + fmt.Sprintf("%d", i)
 		cbV1.SetPathUrlMapItem(path, nowUrl)
-		router.StaticFS(nowUrl, http.Dir(path))
+		registerProtectedStaticFS(router, nowUrl, http.Dir(path))
 	}
 	// 添加连续剧的
 	for i, path := range settings.Get().CommonSettings.SeriesPaths {
 
 		nowUrl := "/series_dir_" + fmt.Sprintf("%d", i)
 		cbV1.SetPathUrlMapItem(path, nowUrl)
-		router.StaticFS(nowUrl, http.Dir(path))
+		registerProtectedStaticFS(router, nowUrl, http.Dir(path))
 	}
 	// --------------------------------------------------
 	// 性能监视
 	if settings.Get().AdvancedSettings.DebugMode == true {
 		// 如果是 DebugMode 那么开启性能监控
-		router.GET("/debug/statsviz/*filepath", func(context *gin.Context) {
+		router.GET("/debug/statsviz/*filepath", middle.CheckResourceAuth(), func(context *gin.Context) {
 			if context.Param("filepath") == "/ws" {
 				statsviz.Ws(context.Writer, context.Request)
 				return
@@ -78,33 +78,29 @@ func InitRouter(
 	// 基础的路由
 	router.GET("/system-status", cbBase.SystemStatusHandler)
 
-	router.POST("/pre-job", cbBase.PreJobHandler)
-
-	router.POST("/setup", cbBase.SetupHandler)
-
 	router.POST("/login", cbBase.LoginHandler)
-	router.POST("/logout", middle.CheckAuth(), cbBase.LogoutHandler)
+	router.POST("/logout", middle.CheckAuth(), middle.ClearResourceAuthCookie(), cbBase.LogoutHandler)
 
 	router.POST("/change-pwd", middle.CheckAuth(), cbBase.ChangePwdHandler)
 
-	router.POST("/check-path", cbBase.CheckPathHandler)
-
-	router.POST("/check-emby-path", cbBase.CheckEmbyPathHandler)
-
-	router.POST("/check-proxy", cbBase.CheckProxyHandler)
-
-	router.POST("/check-cron", cbBase.CheckCronHandler)
-
-	router.GET("/def-settings", cbBase.DefSettingsHandler)
-
-	router.POST("/check-emby-settings", cbBase.CheckEmbySettingsHandler)
-
-	router.POST("/check-tmdb-api-settings", cbBase.CheckTmdbApiHandler)
+	setupAware := router.Group("")
+	setupAware.Use(middle.CheckAuthAfterSetup())
+	{
+		setupAware.POST("/pre-job", cbBase.PreJobHandler)
+		setupAware.POST("/setup", cbBase.SetupHandler)
+		setupAware.POST("/check-path", cbBase.CheckPathHandler)
+		setupAware.POST("/check-emby-path", cbBase.CheckEmbyPathHandler)
+		setupAware.POST("/check-proxy", cbBase.CheckProxyHandler)
+		setupAware.POST("/check-cron", cbBase.CheckCronHandler)
+		setupAware.GET("/def-settings", cbBase.DefSettingsHandler)
+		setupAware.POST("/check-emby-settings", cbBase.CheckEmbySettingsHandler)
+		setupAware.POST("/check-tmdb-api-settings", cbBase.CheckTmdbApiHandler)
+	}
 
 	// v1路由: /v1/xxx
 	GroupV1 := router.Group("/" + cbV1.GetVersion())
 	{
-		GroupV1.Use(middle.CheckAuth())
+		GroupV1.Use(middle.CheckAuth(), middle.IssueResourceAuthCookie())
 
 		GroupV1.GET("/settings", cbV1.SettingsHandler)
 		GroupV1.PUT("/settings", cbV1.SettingsHandler)
@@ -145,11 +141,24 @@ func InitRouter(
 		GroupV1.POST("/subtitles/get_generate_upload_url_info", cbV1.GetGenerateUploadURLHandle)
 
 		GroupV1.POST("/preview/clean_up", cbV1.PreviewCleanUp)
-		GroupV1.GET("/preview/playlist/:videofpathbase64", cbV1.HlsPlaylist)
-		GroupV1.GET("/preview/segments/:resolution/:segment/:videofpathbase64", cbV1.HlsSegment)
 		GroupV1.POST("/preview/search_other_web", cbV1.PreviewSearchOtherWeb)
 		GroupV1.POST("/preview/video_f_path_2_imdb_info", cbV1.PreviewVideoFPath2IMDBInfo)
 	}
+
+	// Browser-native HLS requests cannot attach the management header in every
+	// engine. A short path-bound ticket authenticates the playlist, whose longer
+	// path-bound stream ticket can authenticate only segment GETs.
+	GroupV1Resources := router.Group("/" + cbV1.GetVersion())
+	GroupV1Resources.GET(
+		"/preview/playlist/:videofpathbase64",
+		middle.CheckHLSPlaylistAuth(),
+		cbV1.HlsPlaylist,
+	)
+	GroupV1Resources.GET(
+		"/preview/segments/:resolution/:segment/:videofpathbase64",
+		middle.CheckHLSStreamAuth(),
+		cbV1.HlsSegment,
+	)
 
 	GroupAPIV1 := router.Group("/api/v1")
 	{
@@ -164,4 +173,10 @@ func InitRouter(
 	}
 
 	return cbBase, cbV1
+}
+
+func registerProtectedStaticFS(router *gin.Engine, route string, fileSystem http.FileSystem) {
+	group := router.Group(route)
+	group.Use(middle.CheckResourceAuth())
+	group.StaticFS("", fileSystem)
 }

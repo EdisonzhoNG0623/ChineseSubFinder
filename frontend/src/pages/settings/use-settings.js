@@ -2,12 +2,10 @@ import { reactive, ref, watch } from 'vue';
 import SettingApi from 'src/api/SettingApi';
 import { SystemMessage } from 'src/utils/message';
 import { deepCopy } from 'src/utils/common';
-import { useAppStatusLoading } from 'src/composables/use-app-status-loading';
+import { requestPreJobStatusRefresh } from 'src/composables/use-app-status-loading';
 import { isRunningInDocker } from 'src/store/systemState';
 import { Dialog } from 'quasar';
 import { settingsState } from 'src/store/settingsState';
-
-const { startLoading } = useAppStatusLoading();
 
 export const formModel = reactive({});
 
@@ -95,7 +93,7 @@ export const submitAll = async () => {
   }
   settingsState.settings = { ...settingsState.settings, ...deepCopy(formModel) };
   SystemMessage.success('保存成功');
-  startLoading();
+  requestPreJobStatusRefresh();
 };
 
 /**

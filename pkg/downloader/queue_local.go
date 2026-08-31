@@ -2,14 +2,13 @@ package downloader
 
 import (
 	"fmt"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
-
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
-
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/task_queue"
 	common2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/common"
 	taskQueue2 "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/task_queue"
@@ -36,6 +35,10 @@ func waitQueueWorkerResult(ctx context.Context, done <-chan queueWorkerResult, o
 		}
 		return <-done, true
 	}
+}
+
+func shouldIgnoreSeriesBeforeClaim(bNeedDlSub bool) bool {
+	return !bNeedDlSub
 }
 
 func (d *Downloader) queueDownloaderLocal() {
@@ -238,7 +241,7 @@ func (d *Downloader) queueDownloaderLocal() {
 				}
 			} else {
 
-				bNeedDlSub, seriesInfo, err := nowSubSupplierHub.SeriesNeedDlSub(
+				bNeedDlSub, _, err := nowSubSupplierHub.SeriesNeedDlSub(
 					d.fileDownloader.MediaInfoDealers,
 					oneJob.SeriesRootDirPath,
 					false, false)
@@ -246,21 +249,12 @@ func (d *Downloader) queueDownloaderLocal() {
 					d.log.Errorln("SeriesNeedDlSub", err)
 					return
 				}
-				needMarkSkip := false
-				if bNeedDlSub == false {
-					// 需要跳过
-					needMarkSkip = true
-				} else {
-					// 需要下载的 Eps 是否与 Normal 判断这个连续剧中有那些剧集需要下载的，情况符合。通过下载的时间来判断
-					epsKey := pkg.GetEpisodeKeyName(oneJob.Season, oneJob.Episode)
-					_, found := seriesInfo.NeedDlEpsKeyList[epsKey]
-					if found == false {
-						// 需要跳过
-						needMarkSkip = true
-					}
-				}
-
-				if needMarkSkip == true {
+				// This call intentionally disables subtitle analysis. Its episode map
+				// can therefore omit a concrete queued path because of directory scan
+				// ordering, filename parsing, or metadata gaps; absence from that map is
+				// not evidence that the exact job should be ignored. Only an explicit
+				// series-level skip decision may stop the job before it is claimed.
+				if shouldIgnoreSeriesBeforeClaim(bNeedDlSub) {
 					// 需要标记忽略
 					markJobIgnored(&oneJob)
 					bok, err = d.downloadQueue.Update(oneJob)
@@ -303,7 +297,7 @@ func (d *Downloader) queueDownloaderLocal() {
 	endQueueLog := d.startQueueLog(oneJob.Id)
 	defer endQueueLog()
 
-	downloadCounter := d.queueDownloadCounter.Add(1)
+	downloadCounter := atomic.AddInt64(&d.queueDownloadCounter, 1)
 	jobCtx, cancelJob := context.WithTimeout(d.ctx,
 		time.Duration(settings.Get().AdvancedSettings.TaskQueue.OneJobTimeOut)*time.Second)
 	defer cancelJob()

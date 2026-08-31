@@ -123,6 +123,7 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 		d.completeSeriesBatch(batchJobs, nil, nil, err)
 		return err
 	}
+	bindSeriesInfoToClaimedJobs(seriesInfo, batchJobs)
 	seriesInfo.IsAnime = job.VideoType == common.Anime
 	primaryEpisodeKey := pkg.GetEpisodeKeyName(job.Season, job.Episode)
 	if _, stillNeeded := seriesInfo.NeedDlEpsKeyList[primaryEpisodeKey]; !stillNeeded {
@@ -208,8 +209,8 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 		return nil
 	}
 
-	savedEpisodes := make(map[string]struct{})
-	saveErrors := make(map[string]error)
+	savedVideoPaths := make(map[string]struct{})
+	saveErrorsByVideoPath := make(map[string]error)
 	// 只针对需要下载字幕的视频进行字幕的选择保存
 	for epsKey, episodeInfo := range seriesInfo.NeedDlEpsKeyList {
 		saveErr := runSubtitleSaveWithContext(ctx, func() error {
@@ -220,20 +221,18 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 		if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) {
 			err = fmt.Errorf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d: %w",
 				seriesInfo.Name, episodeInfo.Season, episodeInfo.Episode, saveErr)
-			d.completeSeriesBatch(batchJobs, savedEpisodes, saveErrors, err)
+			d.completeSeriesBatch(batchJobs, savedVideoPaths, saveErrorsByVideoPath, err)
 			return err
 		}
+		recordSeriesSaveResult(savedVideoPaths, saveErrorsByVideoPath, episodeInfo.FileFullPath, saveErr)
 		if saveErr != nil {
-			saveErrors[epsKey] = saveErr
 			d.log.Errorln(saveErr)
-		} else {
-			savedEpisodes[epsKey] = struct{}{}
 		}
 	}
 	// A multi-episode archive is already persisted in FileDownloader's shared
 	// cache. Fan its extracted episode files out now so queued episodes do not
 	// fetch and unpack the same ASSRT collection one by one.
-	backfillReport, backfillErr := d.backfillSeriesCollection(ctx, job, organizeSubFiles)
+	backfillReport, backfillErr := d.backfillSeriesCollection(ctx, job, batchJobs, organizeSubFiles)
 	if backfillErr != nil {
 		// Backfill is additive. The explicitly requested episode still decides the
 		// current job outcome, while partial fan-out remains safely reusable.
@@ -243,9 +242,7 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 		d.log.Infof("seriesDlFunc collection cache backfilled %d episodes and completed %d queued jobs",
 			backfillReport.Saved, backfillReport.QueueMarked)
 	}
-	for episodeKey := range backfillReport.SatisfiedKeys {
-		savedEpisodes[episodeKey] = struct{}{}
-	}
+	mergeBackfillBatchSuccesses(savedVideoPaths, batchJobs, backfillReport.SatisfiedVideoPaths)
 	// 这里会拿到一份季度字幕的列表比如，Key 是 S1E0 S2E0 S3E0，value 是新的存储位置
 	fullSeasonSubDict := d.saveFullSeasonSub(seriesInfo, organizeSubFiles)
 	// TODO 季度的字幕包，应该优先于零散的字幕吧，暂定就这样了，注意是全部都替换
@@ -272,14 +269,12 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 		if errors.Is(saveErr, context.Canceled) || errors.Is(saveErr, context.DeadlineExceeded) {
 			err = fmt.Errorf("cancel at NeedDlEpsKeyList.oneVideoSelectBestSub, %v S%dE%d: %w",
 				seriesInfo.Name, episodeInfo.Season, episodeInfo.Episode, saveErr)
-			d.completeSeriesBatch(batchJobs, savedEpisodes, saveErrors, err)
+			d.completeSeriesBatch(batchJobs, savedVideoPaths, saveErrorsByVideoPath, err)
 			return err
 		}
+		recordSeriesSaveResult(savedVideoPaths, saveErrorsByVideoPath, episodeInfo.FileFullPath, saveErr)
 		if saveErr != nil {
-			saveErrors[seasonEpsKey] = saveErr
 			d.log.Errorln(saveErr)
-		} else {
-			savedEpisodes[seasonEpsKey] = struct{}{}
 		}
 	}
 	// 是否清理全季的缓存字幕文件夹
@@ -290,7 +285,7 @@ func (d *Downloader) seriesDlFuncBatch(ctx context.Context, job taskQueue2.OneJo
 		}
 	}
 
-	primaryErr := d.completeSeriesBatch(batchJobs, savedEpisodes, saveErrors, task_queue.ErrNoSubFound)
+	primaryErr := d.completeSeriesBatch(batchJobs, savedVideoPaths, saveErrorsByVideoPath, task_queue.ErrNoSubFound)
 	if primaryErr != nil {
 		return primaryErr
 	}

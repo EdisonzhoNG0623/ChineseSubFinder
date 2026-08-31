@@ -13,14 +13,12 @@ import (
 func CheckAuth() gin.HandlerFunc {
 
 	return func(context *gin.Context) {
-		authHeader := context.Request.Header.Get("Authorization")
-		fields := strings.Fields(authHeader)
-		if len(fields) != 2 {
+		nowAccessToken, ok := AuthorizationToken(context.GetHeader("Authorization"))
+		if !ok {
 			context.JSON(http.StatusUnauthorized, backend.ReplyCheckAuth{Message: "Request Header Authorization Error"})
 			context.Abort()
 			return
 		}
-		nowAccessToken := fields[1]
 		if nowAccessToken == "" || nowAccessToken != common.GetAccessToken() {
 			context.JSON(http.StatusUnauthorized, backend.ReplyCheckAuth{Message: "AccessToken Error"})
 			context.Abort()
@@ -34,13 +32,12 @@ func CheckAuth() gin.HandlerFunc {
 func CheckApiAuth() gin.HandlerFunc {
 
 	return func(context *gin.Context) {
-		authHeader := context.Request.Header.Get("Authorization")
-		if len(authHeader) <= 1 {
+		nowAccessToken, ok := AuthorizationToken(context.GetHeader("Authorization"))
+		if !ok {
 			context.JSON(http.StatusUnauthorized, backend.ReplyCheckAuth{Message: "Request Header Authorization Error"})
 			context.Abort()
 			return
 		}
-		nowAccessToken := strings.Fields(authHeader)[1]
 		if nowAccessToken == "" {
 			context.JSON(http.StatusUnauthorized, backend.ReplyCheckAuth{Message: "api_key_enabled == false or api_key is empty"})
 			context.Abort()
@@ -53,4 +50,16 @@ func CheckApiAuth() gin.HandlerFunc {
 		// 向下传递消息
 		context.Next()
 	}
+}
+
+// AuthorizationToken preserves the long-standing management/API contract:
+// Authorization must contain exactly two non-empty, whitespace-separated
+// fields and the second field is the credential. The browser sends "Bearer",
+// while existing API clients may use another scheme label.
+func AuthorizationToken(value string) (string, bool) {
+	fields := strings.Fields(value)
+	if len(fields) != 2 {
+		return "", false
+	}
+	return fields[1], true
 }

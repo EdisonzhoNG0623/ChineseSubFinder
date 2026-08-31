@@ -4,8 +4,38 @@ import { SystemMessage } from 'src/utils/message';
 import config from 'src/config';
 import { LocalStorage } from 'quasar';
 import { useSettings } from 'pages/settings/use-settings';
+import { userState } from 'src/store/userState';
 
-export const getUrl = (basePath) => config.BACKEND_URL + basePath.split(/\/|\\/).join('/');
+export const getBackendUrl = (basePath) => {
+  const backendUrl = config.BACKEND_URL.replace(/\/+$/, '');
+  const normalizedPath = basePath.split(/\/|\\/).join('/');
+  const separator = normalizedPath.startsWith('/') ? '' : '/';
+  return `${backendUrl}${separator}${normalizedPath}`;
+};
+
+export const isCrossOriginResourceUrl = (resourceUrl, currentLocation = window.location.href) => {
+  try {
+    const currentUrl = new URL(currentLocation);
+    return new URL(resourceUrl, currentUrl).origin !== currentUrl.origin;
+  } catch {
+    // Fail closed without copying a read-only capability into a malformed or
+    // unintended destination.
+    return false;
+  }
+};
+
+export const getUrl = (basePath) => {
+  const resourceUrl = getBackendUrl(basePath);
+  // Same-origin browser-native requests use the HttpOnly resource cookie.
+  // Only an independent cross-origin BACKEND_URL needs a query capability.
+  if (!userState.resourceTicket || !isCrossOriginResourceUrl(resourceUrl)) return resourceUrl;
+
+  const hashIndex = resourceUrl.indexOf('#');
+  const resourceWithoutHash = hashIndex === -1 ? resourceUrl : resourceUrl.slice(0, hashIndex);
+  const hash = hashIndex === -1 ? '' : resourceUrl.slice(hashIndex);
+  const separator = resourceWithoutHash.includes('?') ? '&' : '?';
+  return `${resourceWithoutHash}${separator}resource_ticket=${encodeURIComponent(userState.resourceTicket)}${hash}`;
+};
 
 // 封面规则
 export const coverRule = ref(LocalStorage.getItem('coverRule') ?? 'poster.jpg');

@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"errors"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -82,6 +83,105 @@ func buildSeriesEpisodeMap(jobs []taskQueueTypes.OneJob) map[int][]int {
 	return bySeason
 }
 
+// bindSeriesInfoToClaimedJobs keeps SxxExx as the supplier search key while
+// restoring the concrete video identity selected by the queue. The directory
+// scanner intentionally collapses duplicate cuts to one EpisodeInfo, and its
+// traversal order must not decide where a claimed job writes subtitles.
+func bindSeriesInfoToClaimedJobs(seriesInfo *series.SeriesInfo, jobs []taskQueueTypes.OneJob) {
+	if seriesInfo == nil || len(jobs) == 0 {
+		return
+	}
+	jobsByEpisode := make(map[string]taskQueueTypes.OneJob, len(jobs))
+	for _, job := range jobs {
+		if job.VideoFPath == "" {
+			continue
+		}
+		episodeKey := pkg.GetEpisodeKeyName(job.Season, job.Episode)
+		if _, alreadyBound := jobsByEpisode[episodeKey]; alreadyBound {
+			// readySeriesBatch enforces this invariant. First-wins keeps direct
+			// callers conservative if they nevertheless pass duplicate cuts.
+			continue
+		}
+		jobsByEpisode[episodeKey] = job
+	}
+	bind := func(episode series.EpisodeInfo, job taskQueueTypes.OneJob) series.EpisodeInfo {
+		episode.Season = job.Season
+		episode.Episode = job.Episode
+		episode.FileFullPath = job.VideoFPath
+		episode.Dir = filepath.Dir(job.VideoFPath)
+		episode.MediaServerInsideVideoID = job.MediaServerInsideVideoID
+		if job.AbsoluteEpisode > 0 {
+			episode.AbsoluteEpisode = job.AbsoluteEpisode
+		}
+		if job.SceneSeason > 0 && job.SceneEpisode > 0 {
+			episode.SceneSeason = job.SceneSeason
+			episode.SceneEpisode = job.SceneEpisode
+		}
+		if job.NumberingSource != "" {
+			episode.NumberingSource = job.NumberingSource
+			episode.NumberingConfidence = job.NumberingConfidence
+		}
+		if job.VideoName != "" {
+			episode.Title = job.VideoName
+		} else {
+			episode.Title = filepath.Base(job.VideoFPath)
+		}
+		// ReadSeriesInfoFromDir may have copied subtitles from an alternate cut.
+		// A claimed job is explicitly requesting this exact video, so that evidence
+		// must not follow the collapsed EpisodeInfo to the target path.
+		episode.SubAlreadyDownloadedList = nil
+		return episode
+	}
+	boundNeed := make(map[string]struct{}, len(seriesInfo.NeedDlEpsKeyList))
+	for episodeKey, episode := range seriesInfo.NeedDlEpsKeyList {
+		if job, found := jobsByEpisode[episodeKey]; found {
+			seriesInfo.NeedDlEpsKeyList[episodeKey] = bind(episode, job)
+			boundNeed[episodeKey] = struct{}{}
+		}
+	}
+	boundEpisodes := make(map[string]struct{}, len(seriesInfo.EpList))
+	for index, episode := range seriesInfo.EpList {
+		episodeKey := pkg.GetEpisodeKeyName(episode.Season, episode.Episode)
+		if job, found := jobsByEpisode[episodeKey]; found {
+			seriesInfo.EpList[index] = bind(episode, job)
+			boundEpisodes[episodeKey] = struct{}{}
+		}
+	}
+	archiveKeys := make(map[string]struct{}, len(seriesInfo.ArchiveEpList))
+	for _, episode := range seriesInfo.ArchiveEpList {
+		archiveKeys[pkg.GetEpisodeKeyName(episode.Season, episode.Episode)] = struct{}{}
+	}
+	if seriesInfo.NeedDlEpsKeyList == nil {
+		seriesInfo.NeedDlEpsKeyList = make(map[string]series.EpisodeInfo)
+	}
+	if seriesInfo.NeedDlSeasonDict == nil {
+		seriesInfo.NeedDlSeasonDict = make(map[int]int)
+	}
+	if seriesInfo.SeasonDict == nil {
+		seriesInfo.SeasonDict = make(map[int]int)
+	}
+	for episodeKey, job := range jobsByEpisode {
+		if job.Season <= 0 || job.Episode <= 0 {
+			continue
+		}
+		bound := bind(series.EpisodeInfo{}, job)
+		if _, found := boundNeed[episodeKey]; !found {
+			seriesInfo.NeedDlEpsKeyList[episodeKey] = bound
+		}
+		if _, found := boundEpisodes[episodeKey]; !found {
+			seriesInfo.EpList = append(seriesInfo.EpList, bound)
+		}
+		if _, found := archiveKeys[episodeKey]; !found {
+			// ArchiveEpList remains search-only. Adding the exact claimed path for a
+			// missing scan entry makes collection mapping aware of the episode, while
+			// outcome evidence continues to come only from exact-path save maps.
+			seriesInfo.ArchiveEpList = append(seriesInfo.ArchiveEpList, bound)
+		}
+		seriesInfo.NeedDlSeasonDict[job.Season] = job.Season
+		seriesInfo.SeasonDict[job.Season] = job.Season
+	}
+}
+
 func enrichSeriesBatchJobs(jobs []taskQueueTypes.OneJob, identities map[string]seriesIdentity) []taskQueueTypes.OneJob {
 	out := append([]taskQueueTypes.OneJob(nil), jobs...)
 	for index := range out {
@@ -116,7 +216,42 @@ type seriesIdentity struct {
 	aliases             []string
 }
 
-func (d *Downloader) completeSeriesBatch(jobs []taskQueueTypes.OneJob, saved map[string]struct{}, saveErrors map[string]error, fallback error) error {
+func canonicalSeriesVideoPath(videoPath string) string {
+	if videoPath == "" {
+		return ""
+	}
+	return filepath.Clean(videoPath)
+}
+
+func recordSeriesSaveResult(savedVideoPaths map[string]struct{}, saveErrorsByVideoPath map[string]error,
+	videoPath string, saveErr error) {
+
+	videoPath = canonicalSeriesVideoPath(videoPath)
+	if videoPath == "" {
+		return
+	}
+	if saveErr != nil {
+		saveErrorsByVideoPath[videoPath] = saveErr
+		return
+	}
+	savedVideoPaths[videoPath] = struct{}{}
+}
+
+func seriesBatchJobOutcome(job taskQueueTypes.OneJob, savedVideoPaths map[string]struct{},
+	saveErrorsByVideoPath map[string]error, fallback error) error {
+
+	videoPath := canonicalSeriesVideoPath(job.VideoFPath)
+	if _, saved := savedVideoPaths[videoPath]; saved {
+		return nil
+	}
+	if saveErr := saveErrorsByVideoPath[videoPath]; saveErr != nil {
+		return saveErr
+	}
+	return fallback
+}
+
+func (d *Downloader) completeSeriesBatch(jobs []taskQueueTypes.OneJob, savedVideoPaths map[string]struct{},
+	saveErrorsByVideoPath map[string]error, fallback error) error {
 	if d.ctx != nil && d.ctx.Err() != nil {
 		return d.ctx.Err()
 	}
@@ -127,13 +262,9 @@ func (d *Downloader) completeSeriesBatch(jobs []taskQueueTypes.OneJob, saved map
 	savedCount, errorCount := 0, 0
 	outcomes := make([]task_queue.JobOutcome, 0, len(jobs))
 	for index, job := range jobs {
-		key := pkg.GetEpisodeKeyName(job.Season, job.Episode)
-		outcome := fallback
-		if _, ok := saved[key]; ok {
-			outcome = nil
+		outcome := seriesBatchJobOutcome(job, savedVideoPaths, saveErrorsByVideoPath, fallback)
+		if outcome == nil {
 			savedCount++
-		} else if saveErr := saveErrors[key]; saveErr != nil {
-			outcome = saveErr
 		}
 		if outcome != nil && !errors.Is(outcome, task_queue.ErrNoSubFound) {
 			errorCount++

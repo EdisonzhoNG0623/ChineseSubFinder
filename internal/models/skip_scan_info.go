@@ -3,10 +3,11 @@ package models
 import (
 	"crypto/sha256"
 	"fmt"
+	"path/filepath"
+
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/decode"
 	"github.com/WQGroup/logger"
 	PTN "github.com/middelink/go-parse-torrent-name"
-	"path/filepath"
 )
 
 type SkipScanInfo struct {
@@ -45,6 +46,15 @@ func GenerateUID4Movie(movieFPath string) string {
 	return fileUID
 }
 
+// GenerateUID4VideoPath creates a media-type-independent UID for one exact
+// video path. The domain prefix keeps it disjoint from the legacy movie and
+// series UID schemes while retaining the existing 64-character schema.
+func GenerateUID4VideoPath(videoFPath string) string {
+	canonicalPath := filepath.Clean(videoFPath)
+	fileUID := fmt.Sprintf("%x", sha256.Sum256([]byte("video-path\x00"+canonicalPath)))
+	return fileUID
+}
+
 func GenerateUID4Series(seriesDirFPath string, season, eps int) string {
 
 	mixInfo := fmt.Sprintf("%sS%02dE%02d", seriesDirFPath, season, eps)
@@ -56,6 +66,15 @@ func NewSkipScanInfoByMovie(movieFPath string, skip bool) *SkipScanInfo {
 
 	var skipScanInfo SkipScanInfo
 	skipScanInfo.UID = GenerateUID4Movie(movieFPath)
+	skipScanInfo.Skip = skip
+
+	return &skipScanInfo
+}
+
+func NewSkipScanInfoByVideoPath(videoFPath string, skip bool) *SkipScanInfo {
+
+	var skipScanInfo SkipScanInfo
+	skipScanInfo.UID = GenerateUID4VideoPath(videoFPath)
 	skipScanInfo.Skip = skip
 
 	return &skipScanInfo
@@ -81,13 +100,14 @@ func NewSkipScanInfoBySeriesEx(oneEpsFPath string, skip bool) *SkipScanInfo {
 		// 换一种方式获取 Season 和 Eps 信息
 		var parse *PTN.TorrentInfo
 		parse, err = PTN.Parse(oneEpsFPath)
-		if err != nil {
+		if err != nil || parse == nil {
 			season = -1
 			eps = -1
 			logger.GetLogger().Errorln("NewSkipScanInfoBySeriesEx Parse Error: ", err)
+		} else {
+			season = parse.Season
+			eps = parse.Episode
 		}
-		season = parse.Season
-		eps = parse.Episode
 	} else {
 		season = oneSeriesEpisode.Season
 		eps = oneSeriesEpisode.Episode

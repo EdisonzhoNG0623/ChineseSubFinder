@@ -995,6 +995,39 @@ func TestLateOutcomeCannotOverwriteManualStatusChange(t *testing.T) {
 	}
 }
 
+func TestUpdateIfRevisionRejectsStaleClaimSnapshot(t *testing.T) {
+	const queueName = "task_queue_stale_manual_update_test"
+	cache_center.DelDb(queueName)
+	t.Cleanup(func() { cache_center.DelDb(queueName) })
+	queue := NewTaskQueue(cache_center.NewCacheCenter(queueName, log_helper.GetLogger4Tester()))
+	t.Cleanup(queue.Close)
+
+	now := time.Now()
+	job := queueTypes.OneJob{Id: "stale-priority-change", VideoFPath: "/media/movie.mkv", VideoType: common.Movie,
+		JobStatus: queueTypes.Waiting, TaskPriority: DefaultTaskPriorityLevel,
+		AddedTime: emby.Time(now), UpdateTime: emby.Time(now)}
+	if added, err := queue.Add(job); err != nil || !added {
+		t.Fatalf("Add() = %v, %v", added, err)
+	}
+	_, stale := queue.GetOneJobByID(job.Id)
+	claimed, err := queue.ClaimBatch([]queueTypes.OneJob{stale}, now)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimBatch() = %+v, %v", claimed, err)
+	}
+
+	stale.TaskPriority = HighTaskPriorityLevel
+	if updated, updateErr := queue.UpdateIfRevision(stale, stale.StateRevision); updateErr != nil || updated {
+		t.Fatalf("stale UpdateIfRevision() = %v, %v", updated, updateErr)
+	}
+	_, current := queue.GetOneJobByID(job.Id)
+	if current.JobStatus != queueTypes.Downloading || current.TaskPriority != DefaultTaskPriorityLevel {
+		t.Fatalf("stale update overwrote active claim: %+v", current)
+	}
+	if current.StateRevision == stale.StateRevision || len(queue.claimedJobs) != 1 || len(queue.claimTokens) != 1 {
+		t.Fatalf("stale update disturbed claim generation: job=%+v claims=%v tokens=%v", current, queue.claimedJobs, queue.claimTokens)
+	}
+}
+
 func TestTokenZeroOutcomeCannotOverwriteConcurrentManualLifecycleChange(t *testing.T) {
 	tests := []struct {
 		name   string

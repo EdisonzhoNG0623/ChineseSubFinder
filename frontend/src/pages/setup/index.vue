@@ -82,11 +82,9 @@ import EmbySetupForm from 'pages/setup/EmbySetupForm';
 import { deepCopy } from 'src/utils/common';
 import { getInfo, isRunningInDocker } from 'src/store/systemState';
 import { SUB_NAME_FORMAT_NORMAL } from 'src/constants/SettingConstants';
-import { useAppStatusLoading } from 'src/composables/use-app-status-loading';
 import { Dialog } from 'quasar';
 
 useSetup();
-const { startLoading } = useAppStatusLoading();
 
 const router = useRouter();
 const step = ref('1');
@@ -177,7 +175,6 @@ const submit = async () => {
   }
   SystemMessage.success('初始化完成');
   await getInfo();
-  startLoading();
   router.push('/access/login');
 };
 </script>

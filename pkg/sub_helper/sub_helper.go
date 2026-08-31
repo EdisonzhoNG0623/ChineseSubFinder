@@ -400,6 +400,10 @@ func SearchMatchedSubFileByOneVideo(l *logrus.Logger, oneVideoFullPath string) (
 }
 
 // SearchVideoMatchSubFileAndRemoveExtMark 找到找个视频目录下相匹配的字幕，同时去除这些字幕中 .default 或者 .forced 的标记。注意这两个标记不应该同时出现，否则无法正确去除
+//
+// Deprecated: this legacy prefix matcher cannot participate in the shared
+// per-video write transaction. Use SaveSubHelper.WithVideoWriteLock together
+// with SnapshotSubtitleMarkers, WriteSubFile, and DemoteSubtitleMarkers.
 func SearchVideoMatchSubFileAndRemoveExtMark(l *logrus.Logger, oneVideoFullPath string) error {
 
 	dir := filepath.Dir(oneVideoFullPath)

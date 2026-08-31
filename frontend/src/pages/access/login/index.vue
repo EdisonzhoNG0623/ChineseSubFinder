@@ -84,9 +84,9 @@ const submit = async () => {
     SystemMessage.error(error.message);
     return;
   }
-  const userData = { accessToken: response.access_token, username: form.username };
+  const userData = { accessToken: response.access_token, username: form.username, resourceTicket: undefined };
   Object.assign(userState, userData);
-  LocalStorage.set('token', userData);
+  LocalStorage.set('token', { accessToken: response.access_token, username: form.username });
   router.push('/');
 };
 </script>

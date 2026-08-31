@@ -1,13 +1,13 @@
-FROM library/node:16-alpine as builder
+FROM library/node:20.19-alpine AS builder
 
 USER root
 RUN mkdir -p /usr/src/app
 WORKDIR /usr/src/app
-add ./package.json /usr/src/app
-add ./package-lock.json /usr/src/app
-add ./.npmrc /usr/src/app
+COPY ./package.json /usr/src/app
+COPY ./package-lock.json /usr/src/app
+COPY ./.npmrc /usr/src/app
 RUN npm ci
-ADD . /usr/src/app
+COPY . /usr/src/app
 RUN ls -al
 RUN npm run build && ls -al dist/spa
 

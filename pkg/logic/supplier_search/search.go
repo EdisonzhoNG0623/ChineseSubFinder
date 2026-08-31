@@ -23,7 +23,7 @@ type retryAtSupplier interface {
 	RetryAtTime() time.Time
 }
 
-var searchSequence atomic.Uint64
+var searchSequence uint64
 var providerLimiters sync.Map
 
 var sharedResourceUses = struct {
@@ -35,7 +35,7 @@ var sharedResourceUses = struct {
 const slowHedgeDelay = 8 * time.Second
 
 func NewSearchID(prefix string) string {
-	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().Unix(), searchSequence.Add(1))
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().Unix(), atomic.AddUint64(&searchSequence, 1))
 }
 
 // Run searches low-latency sources first. Slow browser/API sources are only

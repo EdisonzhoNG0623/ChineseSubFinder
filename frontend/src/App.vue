@@ -6,9 +6,9 @@ import { getJobsStatus, systemState } from 'src/store/systemState';
 import useInterval from 'src/composables/use-interval';
 import { watch } from 'vue';
 import { userState } from 'src/store/userState';
-import { useAppStatusLoading } from 'src/composables/use-app-status-loading';
+import { preJobRefreshRevision, useAppStatusLoading } from 'src/composables/use-app-status-loading';
 
-const { startLoading } = useAppStatusLoading();
+const { startLoading, stopLoading } = useAppStatusLoading();
 
 const getSystemJobStatus = () => {
   if (userState.accessToken && systemState.systemInfo?.is_setup) {
@@ -21,12 +21,21 @@ useInterval(() => {
 }, 8000);
 
 watch(
-  () => systemState.systemInfo?.is_setup,
-  (val) => {
+  () => [systemState.systemInfo?.is_setup, userState.accessToken],
+  ([isSetup, accessToken]) => {
     getSystemJobStatus();
-    if (val) {
+    if (isSetup && accessToken) {
       startLoading();
+    } else {
+      stopLoading();
     }
-  }
+  },
+  { immediate: true }
 );
+
+watch(preJobRefreshRevision, () => {
+  if (systemState.systemInfo?.is_setup && userState.accessToken) {
+    startLoading({ awaitRestart: true });
+  }
+});
 </script>

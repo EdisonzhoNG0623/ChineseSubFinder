@@ -43,7 +43,7 @@ type concurrentSeriesSupplier struct {
 	panic   bool
 }
 
-var concurrentSeriesTestSequence atomic.Uint64
+var concurrentSeriesTestSequence uint64
 
 func (s *concurrentSeriesSupplier) CheckAlive() (bool, int64)    { return true, 0 }
 func (s *concurrentSeriesSupplier) IsAlive() bool                { return true }
@@ -68,7 +68,7 @@ func (s *concurrentSeriesSupplier) GetSubListFromFile4Anime(*series.SeriesInfo) 
 func TestDownloadSubtitleInAllSiteByOneSeriesRunsSuppliersConcurrentlyAndIsolatesPanic(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{})
-	testID := concurrentSeriesTestSequence.Add(1)
+	testID := atomic.AddUint64(&concurrentSeriesTestSequence, 1)
 	okName := fmt.Sprintf("ok-%d", testID)
 	panicName := fmt.Sprintf("panic-%d", testID)
 	suppliers := []ifaces.ISupplier{

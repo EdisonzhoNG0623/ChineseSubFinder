@@ -3,11 +3,10 @@ package manual_upload_sub_2_local
 import (
 	"sync"
 
-	"github.com/ChineseSubFinder/ChineseSubFinder/internal/models"
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/scan_logic"
 	"github.com/pkg/errors"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/save_sub_helper"
+	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/scan_logic"
 	subCommon "github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_formatter/common"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/logic/sub_parser/ass"
@@ -15,18 +14,20 @@ import (
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_parser_hub"
 
-	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_helper"
-
 	"github.com/sirupsen/logrus"
 
 	llq "github.com/emirpasic/gods/queues/linkedlistqueue"
 	"github.com/emirpasic/gods/sets/hashset"
 )
 
+type exactVideoPathSkipSetter interface {
+	SetExactVideoPathSkip(videoPath string, skip bool) error
+}
+
 type ManualUploadSub2Local struct {
 	log              *logrus.Logger
 	saveSubHelper    *save_sub_helper.SaveSubHelper // 保存字幕的逻辑
-	scanLogic        *scan_logic.ScanLogic          // 是否扫描逻辑
+	scanLogic        exactVideoPathSkipSetter       // 是否扫描逻辑
 	subNameFormatter subCommon.FormatterName        // 从 inSubFormatter 推断出来
 	processQueue     *llq.Queue
 	jobSet           *hashset.Set
@@ -183,14 +184,6 @@ func (m *ManualUploadSub2Local) processSub(job *Job) error {
 		}
 	}()
 
-	// 不管是不是保存多个字幕，都要先扫描本地的字幕，进行 .Default .Forced 去除
-	// 这个视频的所有字幕，去除 .default .Forced 标记
-	err = sub_helper.SearchVideoMatchSubFileAndRemoveExtMark(m.log, job.VideoFPath)
-	if err != nil {
-		// 找个错误可以忍
-		m.log.Errorln("SearchVideoMatchSubFileAndRemoveExtMark,", job.VideoFPath, err)
-	}
-
 	bFind, subFileInfo, err := m.subParserHub.DetermineFileTypeFromFile(job.SubFPath)
 	if err != nil {
 		err = errors.New("DetermineFileTypeFromFile," + job.SubFPath + "," + err.Error())
@@ -201,26 +194,31 @@ func (m *ManualUploadSub2Local) processSub(job *Job) error {
 		return err
 	}
 
-	var skipInfo *models.SkipScanInfo
+	setDefault := false
 	if m.subNameFormatter == subCommon.Emby {
-		err = m.saveSubHelper.WriteSubFile2VideoPath(job.VideoFPath, *subFileInfo, "manual", true, false)
-		if err != nil {
-			err = errors.New("WriteSubFile2VideoPath," + job.VideoFPath + "," + err.Error())
-			return err
-		}
-		// 默认设置这个视频“跳过”（跳过扫描和下载字幕）属性
-		skipInfo = models.NewSkipScanInfoByMovie(job.VideoFPath, true)
-	} else {
-		err = m.saveSubHelper.WriteSubFile2VideoPath(job.VideoFPath, *subFileInfo, "manual", false, false)
-		if err != nil {
-			err = errors.New("WriteSubFile2VideoPath," + job.VideoFPath + "," + err.Error())
-			return err
-		}
-		// 默认设置这个视频“跳过”（跳过扫描和下载字幕）属性
-		skipInfo = models.NewSkipScanInfoBySeriesEx(job.VideoFPath, true)
+		setDefault = true
 	}
 
-	m.scanLogic.Set(skipInfo)
+	err = m.saveSubHelper.WithVideoWriteLock(job.VideoFPath, func(writer *save_sub_helper.VideoWriteTransaction) error {
+		// Snapshot only markers uniquely owned by this exact video. Publication,
+		// marker demotion, and the persistent manual skip flag form one video-level
+		// transaction, so an automatic save can run only before or after it.
+		markerSnapshots, markerErr := writer.SnapshotSubtitleMarkers()
+		if markerErr != nil {
+			m.log.Errorln("SnapshotSubtitleMarkers,", job.VideoFPath, markerErr)
+		}
+		if writeErr := writer.WriteSubFile(*subFileInfo, "manual", setDefault, false); writeErr != nil {
+			return errors.New("WriteSubFile2VideoPath," + job.VideoFPath + "," + writeErr.Error())
+		}
+		writer.DemoteSubtitleMarkers(markerSnapshots)
+		if skipErr := m.scanLogic.SetExactVideoPathSkip(job.VideoFPath, true); skipErr != nil {
+			return errors.Wrap(skipErr, "persist exact-path manual subtitle override")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

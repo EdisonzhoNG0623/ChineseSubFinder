@@ -40,10 +40,10 @@ import Hls from 'hls.js';
 import { encode } from 'js-base64';
 import LibraryApi from 'src/api/LibraryApi';
 import Artplayer from 'components/Artplayer';
-import config from 'src/config';
 import { useQuasar } from 'quasar';
-import { getUrl } from 'pages/library/use-library';
+import { getBackendUrl, getUrl, isCrossOriginResourceUrl } from 'pages/library/use-library';
 import { userState } from 'src/store/userState';
+import { requestAccessToken } from 'src/utils/http/authorization';
 
 const $q = useQuasar();
 
@@ -61,6 +61,7 @@ const visible = ref(false);
 const artInstance = ref(null);
 const selectedSub = ref(null);
 const checkResult = ref(null);
+const playlistTicket = ref(null);
 
 const handleBtnClick = async () => {
   if (props.onBtnClick) {
@@ -94,11 +95,18 @@ const showSelectSubtitleDialog = () => {
   });
 };
 
+const playlistUrl = computed(() => {
+  const path = `/v1/preview/playlist/${encode(encodeURIComponent(props.path))}`;
+  const url = getBackendUrl(path);
+  if (!playlistTicket.value || !isCrossOriginResourceUrl(url)) return url;
+  return `${url}?hls_ticket=${encodeURIComponent(playlistTicket.value)}`;
+});
+
 const artOption = computed(() => {
   const options = {
     autoplay: true,
     autoSize: true,
-    url: `${config.BACKEND_URL}/v1/preview/playlist/${encode(encodeURIComponent(props.path))}`,
+    url: playlistUrl.value,
     subtitle: {
       url: selectedSub.value.startsWith('blob') ? selectedSub.value : getUrl(selectedSub.value),
     },
@@ -107,10 +115,6 @@ const artOption = computed(() => {
       m3u8(video, url) {
         if (Hls.isSupported()) {
           const hls = new Hls();
-          hls.config.xhrSetup = (xhr) => {
-            const { accessToken } = userState;
-            xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
-          };
           hls.loadSource(url);
           hls.attachMedia(video);
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -151,12 +155,18 @@ const artOption = computed(() => {
 
 const handleBeforeShow = async () => {
   selectedSub.value = props.subtitleUrlList?.[0];
-  const [res, err] = await LibraryApi.getVideoM3u8(props.path);
+  const [res, err, response] = await LibraryApi.getVideoM3u8(props.path);
+  const responseToken = requestAccessToken(response?.config);
+  playlistTicket.value =
+    responseToken && responseToken === userState.accessToken
+      ? response?.headers?.['x-csf-hls-playlist-ticket']
+      : undefined;
   checkResult.value = res || err;
 };
 
 const handleBeforeHide = () => {
   checkResult.value = null;
+  playlistTicket.value = null;
   LibraryApi.cleanAllPreviewJobData();
 };
 </script>

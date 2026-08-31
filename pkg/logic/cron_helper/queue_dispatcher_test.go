@@ -40,13 +40,13 @@ func (schedule *fakeQueueSchedule) set(next time.Time, scheduled bool) {
 	}
 }
 
-func waitForCount(t *testing.T, count *atomic.Int32, want int32) {
+func waitForCount(t *testing.T, count *int32, want int32) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
-	for count.Load() < want {
+	for atomic.LoadInt32(count) < want {
 		select {
 		case <-deadline:
-			t.Fatalf("launch count = %d, want at least %d", count.Load(), want)
+			t.Fatalf("launch count = %d, want at least %d", atomic.LoadInt32(count), want)
 		case <-time.After(time.Millisecond):
 		}
 	}
@@ -55,9 +55,9 @@ func waitForCount(t *testing.T, count *atomic.Int32, want int32) {
 func TestQueueDispatcherStopsAndRebuilds(t *testing.T) {
 	schedule := newFakeQueueSchedule()
 	dispatcher := &queueDispatcher{}
-	var launches atomic.Int32
+	var launches int32
 	launch := func() bool {
-		launches.Add(1)
+		atomic.AddInt32(&launches, 1)
 		schedule.set(time.Time{}, false)
 		return true
 	}
@@ -69,7 +69,7 @@ func TestQueueDispatcherStopsAndRebuilds(t *testing.T) {
 
 	schedule.set(time.Now(), true)
 	time.Sleep(20 * time.Millisecond)
-	if got := launches.Load(); got != 1 {
+	if got := atomic.LoadInt32(&launches); got != 1 {
 		t.Fatalf("stopped dispatcher launched work: %d", got)
 	}
 
@@ -86,9 +86,9 @@ func TestQueueDispatcherRetriesAfterWorkerReleaseEdge(t *testing.T) {
 	schedule.set(time.Now(), true)
 	<-schedule.wake // let indexed readiness, not a stale mutation edge, drive launch
 	dispatcher := &queueDispatcher{}
-	var attempts atomic.Int32
+	var attempts int32
 	dispatcher.start(schedule, func() bool {
-		attempt := attempts.Add(1)
+		attempt := atomic.AddInt32(&attempts, 1)
 		if attempt == 1 {
 			return false // saturated pool
 		}
@@ -114,9 +114,9 @@ func TestQueueDispatcherHonorsPreexistingCoalescedWake(t *testing.T) {
 	schedule.set(time.Now(), true)
 
 	dispatcher := &queueDispatcher{}
-	var launches atomic.Int32
+	var launches int32
 	dispatcher.start(schedule, func() bool {
-		launches.Add(1)
+		atomic.AddInt32(&launches, 1)
 		schedule.set(time.Time{}, false)
 		return true
 	})

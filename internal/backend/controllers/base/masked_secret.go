@@ -2,8 +2,8 @@ package base
 
 import (
 	"net/http"
-	"strings"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/internal/backend/middle"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/common"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/settings"
 	backendTypes "github.com/ChineseSubFinder/ChineseSubFinder/pkg/types/backend"
@@ -17,8 +17,8 @@ func resolveMaskedSecret(c *gin.Context, incoming, current string) (string, bool
 	if !settings.IsMaskedSecret(incoming) {
 		return incoming, true
 	}
-	fields := strings.Fields(c.GetHeader("Authorization"))
-	if len(fields) != 2 || fields[0] != "Bearer" || fields[1] == "" || fields[1] != common.GetAccessToken() {
+	token, ok := middle.AuthorizationToken(c.GetHeader("Authorization"))
+	if !ok || token == "" || token != common.GetAccessToken() {
 		c.JSON(http.StatusUnauthorized, backendTypes.ReplyCheckAuth{Message: "authentication required for masked credential"})
 		return "", false
 	}

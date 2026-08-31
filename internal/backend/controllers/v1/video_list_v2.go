@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ChineseSubFinder/ChineseSubFinder/internal/models"
-
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/search"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/sub_helper"
@@ -287,17 +285,14 @@ func (cb *ControllerBase) ScanSkipInfo(c *gin.Context) {
 			}
 
 			for _, videoSkipInfo := range videoSkipInfos.VideoSkipInfos {
-
-				var skipInfo *models.SkipScanInfo
-				if videoSkipInfo.VideoType == 0 {
-					// 电影
-					skipInfo = models.NewSkipScanInfoByMovie(videoSkipInfo.PhysicalVideoFileFullPath, videoSkipInfo.IsSkip)
-				} else {
-					// 电视剧
-					skipInfo = models.NewSkipScanInfoBySeriesEx(videoSkipInfo.PhysicalVideoFileFullPath, videoSkipInfo.IsSkip)
+				err = cb.cronHelper.Downloader().ScanLogic.SetVideoPathSkip(
+					videoSkipInfo.VideoType,
+					videoSkipInfo.PhysicalVideoFileFullPath,
+					videoSkipInfo.IsSkip,
+				)
+				if err != nil {
+					return
 				}
-
-				cb.cronHelper.Downloader().ScanLogic.Set(skipInfo)
 			}
 
 			c.JSON(http.StatusOK, backend2.ReplyCommon{

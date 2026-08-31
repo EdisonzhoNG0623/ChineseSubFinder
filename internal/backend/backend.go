@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ChineseSubFinder/ChineseSubFinder/internal/backend/middle"
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg"
 
 	"github.com/ChineseSubFinder/ChineseSubFinder/pkg/local_http_proxy_server"
@@ -75,8 +76,7 @@ func (b *BackEnd) start() {
 	gin.SetMode(gin.ReleaseMode)
 	gin.DefaultWriter = ioutil.Discard
 	engine := gin.Default()
-	// 默认所有都通过
-	engine.Use(cors.Default())
+	engine.Use(cors.New(backendCORSConfig()))
 	// 初始化路由
 	b.preJob = pre_job.NewPreJob(b.logger)
 	cbBase, v1Router := InitRouter(engine, b.cronHelper, b.restartSignal, b.preJob)
@@ -98,7 +98,7 @@ func (b *BackEnd) start() {
 		b.logger.Errorln("GetVideoAndSubPreviewCacheFolder Error:", err)
 		return
 	}
-	engine.StaticFS("/static/preview", http.Dir(previewCacheFolder))
+	registerProtectedStaticFS(engine, "/static/preview", http.Dir(previewCacheFolder))
 	// -----------------------------------------
 	// api 服务
 	engine.Any("/api", func(c *gin.Context) {
@@ -121,6 +121,14 @@ func (b *BackEnd) start() {
 			v1Router.Close()
 		}()
 	}()
+}
+
+func backendCORSConfig() cors.Config {
+	config := cors.DefaultConfig()
+	config.AllowAllOrigins = true
+	config.AddAllowHeaders("Authorization")
+	config.AddExposeHeaders(middle.ResourceAuthTicketHeader, middle.HLSPlaylistTicketHeader)
+	return config
 }
 
 func (b *BackEnd) Restart() {
